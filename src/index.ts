@@ -718,8 +718,12 @@ async function handleInstagramProfile(
             return;
         }
         if (err instanceof InstagramRateLimitedError) {
+            const hint =
+                err.status === 429
+                    ? "تجاوزنا حد الطلبات من جهة انستغرام"
+                    : "الكوكيز منتهية أو مفقودة";
             await ctx.reply(
-                "⚠️ انستغرام رفض الطلب (ربما تجاوزنا حد الطلبات أو الكوكيز منتهية). حاول بعد قليل.",
+                `⚠️ انستغرام رفض الطلب (HTTP ${err.status} — ${hint}). حاول بعد قليل.`,
             );
             return;
         }
