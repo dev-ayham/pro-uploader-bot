@@ -117,6 +117,13 @@ export interface YtDlpOptions {
     cookiesFile?: string;
     /** Browser User-Agent string forwarded with `--user-agent`. */
     userAgent?: string;
+    /**
+     * Cap the selected video stream height (e.g. 720 for "720p or lower").
+     * Implemented via yt-dlp's `-f` format selector so the merged output
+     * is still the best quality that fits the cap. Falls back to "best"
+     * if the requested height is unavailable.
+     */
+    maxHeight?: number;
 }
 
 export async function downloadWithYtDlp(
@@ -134,6 +141,14 @@ export async function downloadWithYtDlp(
         `${prefix}_%(title).80B_%(id)s.%(ext)s`,
     );
 
+    // When the caller asks for a max height we still let yt-dlp merge the
+    // best video+audio tracks that fit the cap so the output is a normal
+    // playable mp4, not a video-only stream.
+    const formatSelector =
+        options.maxHeight && options.maxHeight > 0
+            ? `bestvideo[height<=${options.maxHeight}]+bestaudio/best[height<=${options.maxHeight}]/best`
+            : "best[ext=mp4]/best[ext=mkv]/best";
+
     const args = [
         "--no-playlist",
         "--no-warnings",
@@ -141,7 +156,9 @@ export async function downloadWithYtDlp(
         "--restrict-filenames",
         "--newline",
         "-f",
-        "best[ext=mp4]/best[ext=mkv]/best",
+        formatSelector,
+        "--merge-output-format",
+        "mp4",
         "-o",
         outputTemplate,
         "--print",

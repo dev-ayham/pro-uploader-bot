@@ -33,6 +33,12 @@ export interface UploadOptions {
     /** String to append to the visible filename before the extension. */
     renameSuffix?: string;
     /**
+     * Cap the selected video stream height (e.g. 720 for "720p or lower").
+     * Forwarded to yt-dlp's format selector. Ignored for direct-download
+     * URLs (there's nothing to transcode on our side).
+     */
+    maxHeight?: number;
+    /**
      * Absolute path to a JPEG (≤ 320x320, ≤ 200 KB) to use as the document /
      * video thumbnail. When unset the media is uploaded without a custom
      * thumb and Telegram generates one from the first frame.
@@ -173,7 +179,9 @@ export class MTProtoUploader {
                     (fraction) => {
                         onProgress?.({ phase: "download", fraction });
                     },
-                    this.ytDlpOptions,
+                    // Merge per-call overrides (max height) on top of the
+                    // instance-wide cookies / user-agent defaults.
+                    { ...this.ytDlpOptions, maxHeight: options.maxHeight },
                 );
             } else {
                 // Plain direct URL (.mp4, .pdf, ...). yt-dlp's generic

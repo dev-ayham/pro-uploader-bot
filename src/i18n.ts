@@ -143,6 +143,19 @@ interface Strings {
     ai_retrying: string;
     ai_reupload_document: string;
     ai_reupload_video: string;
+
+    // Quality-selection menu shown on URL receipt
+    quality_menu_title: string;
+    quality_btn_audio: string;
+    quality_btn_best: string;
+    quality_btn_1080: string;
+    quality_btn_720: string;
+    quality_btn_480: string;
+    quality_btn_360: string;
+    quality_btn_document: string;
+    quality_btn_cancel: string;
+    quality_cancelled: string;
+    quality_expired: string;
 }
 
 const ar: Strings = {
@@ -311,6 +324,17 @@ const ar: Strings = {
     ai_retrying: "🔄 إعادة المحاولة على الرابط السابق...",
     ai_reupload_document: "📄 إعادة الرفع كملف...",
     ai_reupload_video: "🎬 إعادة الرفع كفيديو...",
+    quality_menu_title: "اختر طريقة التحميل:",
+    quality_btn_audio: "🎵 صوت فقط (MP3)",
+    quality_btn_best: "🎬 أفضل جودة",
+    quality_btn_1080: "📺 1080p",
+    quality_btn_720: "📺 720p",
+    quality_btn_480: "📺 480p",
+    quality_btn_360: "📺 360p",
+    quality_btn_document: "📄 كملف",
+    quality_btn_cancel: "❌ إلغاء",
+    quality_cancelled: "تم الإلغاء.",
+    quality_expired: "انتهت صلاحية الخيار. أرسل الرابط من جديد.",
 };
 
 const en: Strings = {
@@ -480,6 +504,17 @@ Clear: <code>/suffix clear</code>`,
     ai_retrying: "🔄 Retrying the previous URL...",
     ai_reupload_document: "📄 Re-uploading as document...",
     ai_reupload_video: "🎬 Re-uploading as video...",
+    quality_menu_title: "Choose how to download:",
+    quality_btn_audio: "🎵 Audio only (MP3)",
+    quality_btn_best: "🎬 Best quality",
+    quality_btn_1080: "📺 1080p",
+    quality_btn_720: "📺 720p",
+    quality_btn_480: "📺 480p",
+    quality_btn_360: "📺 360p",
+    quality_btn_document: "📄 As document",
+    quality_btn_cancel: "❌ Cancel",
+    quality_cancelled: "Cancelled.",
+    quality_expired: "This choice expired. Please send the link again.",
 };
 
 const tr: Strings = {
@@ -649,6 +684,17 @@ Temizle: <code>/suffix clear</code>`,
     ai_retrying: "🔄 Önceki URL yeniden deneniyor...",
     ai_reupload_document: "📄 Belge olarak yeniden yükleniyor...",
     ai_reupload_video: "🎬 Video olarak yeniden yükleniyor...",
+    quality_menu_title: "İndirme şeklini seçin:",
+    quality_btn_audio: "🎵 Sadece ses (MP3)",
+    quality_btn_best: "🎬 En iyi kalite",
+    quality_btn_1080: "📺 1080p",
+    quality_btn_720: "📺 720p",
+    quality_btn_480: "📺 480p",
+    quality_btn_360: "📺 360p",
+    quality_btn_document: "📄 Belge olarak",
+    quality_btn_cancel: "❌ İptal",
+    quality_cancelled: "İptal edildi.",
+    quality_expired: "Bu seçim sona erdi. Lütfen bağlantıyı tekrar gönderin.",
 };
 
 const fr: Strings = {
@@ -817,6 +863,17 @@ Effacer: <code>/suffix clear</code>`,
     ai_retrying: "🔄 Nouvelle tentative sur l'URL précédente...",
     ai_reupload_document: "📄 Renvoi en document...",
     ai_reupload_video: "🎬 Renvoi en vidéo...",
+    quality_menu_title: "Choisissez le mode de téléchargement :",
+    quality_btn_audio: "🎵 Audio seul (MP3)",
+    quality_btn_best: "🎬 Meilleure qualité",
+    quality_btn_1080: "📺 1080p",
+    quality_btn_720: "📺 720p",
+    quality_btn_480: "📺 480p",
+    quality_btn_360: "📺 360p",
+    quality_btn_document: "📄 En document",
+    quality_btn_cancel: "❌ Annuler",
+    quality_cancelled: "Annulé.",
+    quality_expired: "Ce choix a expiré. Veuillez renvoyer le lien.",
 };
 
 const es: Strings = {
@@ -985,6 +1042,17 @@ Borrar: <code>/suffix clear</code>`,
     ai_retrying: "🔄 Reintentando la URL anterior...",
     ai_reupload_document: "📄 Reenviando como documento...",
     ai_reupload_video: "🎬 Reenviando como video...",
+    quality_menu_title: "Elige cómo descargar:",
+    quality_btn_audio: "🎵 Solo audio (MP3)",
+    quality_btn_best: "🎬 Mejor calidad",
+    quality_btn_1080: "📺 1080p",
+    quality_btn_720: "📺 720p",
+    quality_btn_480: "📺 480p",
+    quality_btn_360: "📺 360p",
+    quality_btn_document: "📄 Como documento",
+    quality_btn_cancel: "❌ Cancelar",
+    quality_cancelled: "Cancelado.",
+    quality_expired: "Esta opción caducó. Vuelve a enviar el enlace.",
 };
 
 /**
