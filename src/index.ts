@@ -214,6 +214,28 @@ bot.use(async (ctx, next) => {
     await next();
 });
 
+// Admin "pending input" is set by the inline /admin buttons (e.g.
+// Broadcast → waiting for the message body, Ban → waiting for the
+// chat_id). It gets consumed by the message:text handler below. But
+// grammy runs bot.command() handlers before message:text, so if the
+// admin types any other command while a pending input is armed, the
+// command runs and the pending flag is never cleared — and the NEXT
+// plain-text message would then be treated as the pending answer
+// (e.g. accidentally broadcast "ok" to every user). Clear the flag
+// pre-emptively whenever an admin sends any /command so only a direct
+// reply to the prompt counts.
+bot.use(async (ctx, next) => {
+    const chatId = ctx.chat?.id;
+    const text = ctx.message?.text;
+    if (chatId && text && text.startsWith("/") && isAdmin(chatId)) {
+        const pending = getPendingInput(chatId);
+        if (pending && pending.kind.startsWith("admin_")) {
+            clearPendingInput(chatId);
+        }
+    }
+    await next();
+});
+
 // /start, /menu, /help, /about, /cancel and the top-level inline nav.
 registerMenuHandlers(bot);
 
