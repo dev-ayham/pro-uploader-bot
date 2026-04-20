@@ -55,6 +55,91 @@ export function shouldUseYtDlp(url: string): boolean {
     }
 }
 
+/**
+ * Common file extensions we're willing to download directly over HTTP.
+ * These are a superset of what Telegram renders natively (video / audio
+ * / image / document) — anything we can't preview is still uploadable
+ * as a regular file.
+ */
+const DIRECT_FILE_EXTS = new Set([
+    // video
+    ".mp4",
+    ".m4v",
+    ".mov",
+    ".mkv",
+    ".webm",
+    ".avi",
+    ".flv",
+    ".wmv",
+    ".ts",
+    ".3gp",
+    // audio
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".flac",
+    ".ogg",
+    ".wav",
+    ".opus",
+    ".wma",
+    // image
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".tiff",
+    ".heic",
+    // document
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".txt",
+    ".rtf",
+    ".epub",
+    ".mobi",
+    // archive
+    ".zip",
+    ".rar",
+    ".7z",
+    ".tar",
+    ".gz",
+    ".bz2",
+    ".xz",
+    // misc
+    ".iso",
+    ".apk",
+    ".exe",
+    ".dmg",
+]);
+
+/**
+ * Best-effort check for a "direct file URL" — i.e. a URL whose path
+ * ends with a known downloadable extension. Used to reject obvious
+ * junk URLs up-front with a friendly message before handing off to
+ * yt-dlp or a plain HTTP GET.
+ */
+export function isDirectFileUrl(url: string): boolean {
+    try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            return false;
+        }
+        const pathname = parsed.pathname.toLowerCase();
+        const dot = pathname.lastIndexOf(".");
+        if (dot < 0) return false;
+        const ext = pathname.slice(dot);
+        return DIRECT_FILE_EXTS.has(ext);
+    } catch {
+        return false;
+    }
+}
+
 export interface DownloadResult {
     filePath: string;
     filename: string;
