@@ -7,7 +7,8 @@
  */
 export type PendingInput =
     | { kind: "rename_prefix" }
-    | { kind: "rename_suffix" };
+    | { kind: "rename_suffix" }
+    | { kind: "thumbnail_photo" };
 
 const pending = new Map<number, PendingInput>();
 

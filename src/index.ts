@@ -2,7 +2,8 @@ import "dotenv/config";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { Bot } from "grammy";
+import { Bot, Context, InputFile } from "grammy";
+import type { InputMediaPhoto } from "grammy/types";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { MTProtoUploader, UploadProgress } from "./services/mtproto-uploader";
@@ -11,7 +12,21 @@ import {
     handlePendingInputIfAny,
     registerSettingsHandlers,
 } from "./handlers/settings";
+import {
+    publishBotCommands,
+    registerMenuHandlers,
+} from "./handlers/menu";
 import { closeDb, getUserPrefs } from "./services/db";
+import { generateScreenshots } from "./services/screenshots";
+import {
+    hasThumbnail,
+    saveThumbnailFromFile,
+    thumbnailPath,
+} from "./services/thumbnails";
+import {
+    clearPendingInput,
+    getPendingInput,
+} from "./services/pending-input";
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
 const apiId = parseInt(process.env.API_ID || "0", 10);
@@ -105,11 +120,134 @@ function rememberProcessed(chatId: number, messageId: number): boolean {
     return true;
 }
 
+/**
+ * Generate up to `count` equidistant JPEG thumbnails for a just-uploaded
+ * video and send them to the same chat as an album. No-op for non-video
+ * MIME types. Errors are caught and reported in-chat so the successful
+ * main upload is not retroactively "failed" by a ffmpeg hiccup.
+ */
+const VIDEO_EXTS = new Set([
+    ".mp4", ".mkv", ".webm", ".mov", ".avi", ".flv", ".m4v", ".ts",
+    ".mpg", ".mpeg", ".3gp", ".wmv",
+]);
+
+async function sendScreenshots(
+    ctx: Context,
+    filePath: string,
+    filename: string,
+    count: number,
+): Promise<void> {
+    if (count < 1) return;
+    const ext = path.extname(filename).toLowerCase();
+    if (!VIDEO_EXTS.has(ext)) return;
+    if (!ctx.chat) return;
+    let shots: string[] = [];
+    try {
+        shots = await generateScreenshots(filePath, count, os.tmpdir());
+        if (shots.length === 0) {
+            await ctx.reply("⚠️ تعذّر استخراج لقطات من الفيديو.");
+            return;
+        }
+        // Telegram albums take 2-10 items. If count<2 we still want to show
+        // the single shot as a standalone photo.
+        if (shots.length === 1) {
+            await ctx.replyWithPhoto(new InputFile(shots[0]), {
+                caption: "🖼️ لقطة من الفيديو",
+            });
+        } else {
+            // sendMediaGroup caps at 10 items per call; our cycle is [0,3,5,10]
+            // so we never overflow.
+            const media: InputMediaPhoto[] = shots.slice(0, 10).map((p, i) => ({
+                type: "photo",
+                media: new InputFile(p),
+                caption: i === 0 ? `🖼️ ${shots.length} لقطات من الفيديو` : undefined,
+            }));
+            await ctx.replyWithMediaGroup(media);
+        }
+    } catch (err) {
+        console.error("sendScreenshots failed:", err);
+        const detail = err instanceof Error ? err.message : String(err);
+        await ctx.reply(
+            `⚠️ فشل استخراج اللقطات: <code>${escapeHtmlForMsg(detail)}</code>`,
+            { parse_mode: "HTML" },
+        );
+    } finally {
+        for (const p of shots) {
+            try {
+                fs.unlinkSync(p);
+            } catch {
+                // best-effort
+            }
+        }
+    }
+}
+
+function escapeHtmlForMsg(s: string): string {
+    return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
 // --- Bot Handlers ---
-bot.command("start", (ctx) => ctx.reply(strings.ar.welcome));
+// /start, /menu, /help, /about, /cancel and the top-level inline nav.
+registerMenuHandlers(bot);
 
 // /settings, /settings callback_query handlers etc.
 registerSettingsHandlers(bot);
+
+bot.on("message:photo", async (ctx) => {
+    // Photos are only interesting when the user is mid-flow on /settings →
+    // "ضبط الصورة المصغّرة". Any other photo is ignored silently.
+    const chatId = ctx.chat.id;
+    const pending = getPendingInput(chatId);
+    if (!pending || pending.kind !== "thumbnail_photo") return;
+
+    const photos = ctx.message.photo;
+    const biggest = photos[photos.length - 1];
+    if (!biggest) return;
+    let tmpPath: string | undefined;
+    try {
+        const fileInfo = await ctx.api.getFile(biggest.file_id);
+        if (!fileInfo.file_path) {
+            throw new Error("Telegram did not return a file_path");
+        }
+        // Download the photo through the Bot API. `bot.api.getFile` returns
+        // the relative path; we concat with the configured Bot API base URL.
+        const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileInfo.file_path}`;
+        const res = await fetch(downloadUrl);
+        if (!res.ok) {
+            throw new Error(`Telegram getFile returned HTTP ${res.status}`);
+        }
+        tmpPath = path.join(
+            os.tmpdir(),
+            `tg-thumb-${chatId}-${Date.now()}.src`,
+        );
+        const buffer = Buffer.from(await res.arrayBuffer());
+        fs.writeFileSync(tmpPath, buffer);
+        await saveThumbnailFromFile(chatId, tmpPath);
+        clearPendingInput(chatId);
+        await ctx.reply(
+            "✅ تم حفظ الصورة المصغّرة. ستُستخدم لجميع الملفات القادمة. افتح /settings للإدارة.",
+        );
+    } catch (err) {
+        console.error("thumbnail save failed:", err);
+        const detail = err instanceof Error ? err.message : String(err);
+        clearPendingInput(chatId);
+        await ctx.reply(
+            `❌ تعذّر حفظ الصورة المصغّرة: <code>${escapeHtmlForMsg(detail)}</code>`,
+            { parse_mode: "HTML" },
+        );
+    } finally {
+        if (tmpPath) {
+            try {
+                fs.unlinkSync(tmpPath);
+            } catch {
+                // best-effort
+            }
+        }
+    }
+});
 
 bot.on("message:text", async (ctx) => {
     // If the user is mid-flow inside a /settings prompt (typing a rename
@@ -225,6 +363,20 @@ bot.on("message:text", async (ctx) => {
                     spoiler: prefs.spoiler,
                     renamePrefix: prefs.renamePrefix,
                     renameSuffix: prefs.renameSuffix,
+                    thumbnailPath: hasThumbnail(ctx.chat.id)
+                        ? thumbnailPath(ctx.chat.id)
+                        : undefined,
+                    postUpload:
+                        prefs.screenshotsCount > 0
+                            ? async (filePath, filename) => {
+                                  await sendScreenshots(
+                                      ctx,
+                                      filePath,
+                                      filename,
+                                      prefs.screenshotsCount,
+                                  );
+                              }
+                            : undefined,
                 },
             );
 
@@ -281,6 +433,10 @@ bot.start({
     allowed_updates: ["message", "callback_query"],
     onStart: (me) => {
         console.log(`Bot @${me.username} is polling on port ${port}...`);
+        // Publish the Telegram /-command menu once the bot is live. Failure
+        // here is logged inside publishBotCommands and must not block the
+        // main polling loop.
+        void publishBotCommands(bot);
     },
 }).catch((err) => {
     console.error("bot.start() failed:", err);

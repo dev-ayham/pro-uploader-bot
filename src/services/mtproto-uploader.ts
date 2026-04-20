@@ -29,6 +29,19 @@ export interface UploadOptions {
     renamePrefix?: string;
     /** String to append to the visible filename before the extension. */
     renameSuffix?: string;
+    /**
+     * Absolute path to a JPEG (≤ 320x320, ≤ 200 KB) to use as the document /
+     * video thumbnail. When unset the media is uploaded without a custom
+     * thumb and Telegram generates one from the first frame.
+     */
+    thumbnailPath?: string;
+    /**
+     * Hook called after a successful upload but *before* the downloaded
+     * file is deleted. Used by callers that want to do additional work on
+     * the local file (e.g. extract screenshots, compute a hash) without
+     * having to re-download. Throws are logged but don't fail the upload.
+     */
+    postUpload?: (filePath: string, filename: string) => Promise<void>;
 }
 
 /**
@@ -137,6 +150,7 @@ export class MTProtoUploader {
                     caption,
                     options.asDocument === true,
                     onProgress,
+                    options.thumbnailPath,
                 );
             } else {
                 await this.client.sendFile(chatId, {
@@ -144,11 +158,25 @@ export class MTProtoUploader {
                     caption,
                     parseMode: "html",
                     forceDocument: options.asDocument === true,
+                    thumb: options.thumbnailPath,
                     workers: 4,
                     progressCallback: (progress) => {
                         onProgress?.({ phase: "upload", fraction: progress });
                     },
                 });
+            }
+
+            if (options.postUpload) {
+                try {
+                    await options.postUpload(
+                        downloaded.filePath,
+                        downloaded.filename,
+                    );
+                } catch (err) {
+                    // Never let a post-upload side-effect (screenshots, etc.)
+                    // fail the primary operation the user asked for.
+                    console.error("postUpload hook threw:", err);
+                }
             }
         } finally {
             if (downloaded) {
@@ -168,6 +196,7 @@ export class MTProtoUploader {
         captionHtml: string,
         forceFile: boolean,
         onProgress?: (progress: UploadProgress) => void,
+        thumbnailPath?: string,
     ): Promise<void> {
         const mimeType =
             (mime.lookup(filename) as string) || "application/octet-stream";
@@ -183,6 +212,28 @@ export class MTProtoUploader {
                 onProgress?.({ phase: "upload", fraction });
             },
         });
+
+        // Custom thumbnail (if any) is uploaded as a separate InputFile so we
+        // can attach it to the InputMediaUploadedDocument below. Failures
+        // here degrade gracefully to "no thumb" so the main upload is not
+        // sabotaged by a bad thumbnail.
+        let uploadedThumb: Api.TypeInputFile | undefined;
+        if (thumbnailPath) {
+            try {
+                const thumbStats = fs.statSync(thumbnailPath);
+                const thumbFile = new CustomFile(
+                    "thumb.jpg",
+                    thumbStats.size,
+                    thumbnailPath,
+                );
+                uploadedThumb = await this.client.uploadFile({
+                    file: thumbFile,
+                    workers: 1,
+                });
+            } catch (err) {
+                console.error("thumbnail upload failed, continuing without:", err);
+            }
+        }
 
         const attributes: Api.TypeDocumentAttribute[] = [
             new Api.DocumentAttributeFilename({ fileName: filename }),
@@ -203,6 +254,7 @@ export class MTProtoUploader {
 
         const media = new Api.InputMediaUploadedDocument({
             file: uploadedFile,
+            thumb: uploadedThumb,
             mimeType,
             attributes,
             spoiler: true,

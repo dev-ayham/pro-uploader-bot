@@ -17,6 +17,9 @@ export interface UserPrefs {
     language: "ar" | "en";
     renamePrefix: string;
     renameSuffix: string;
+    /** How many equidistant frames to attach as an album after a video
+     * upload. 0 disables the feature. */
+    screenshotsCount: number;
 }
 
 const DEFAULTS: Omit<UserPrefs, "chatId"> = {
@@ -25,22 +28,32 @@ const DEFAULTS: Omit<UserPrefs, "chatId"> = {
     language: "ar",
     renamePrefix: "",
     renameSuffix: "",
+    screenshotsCount: 0,
 };
+
+/**
+ * Writable root directory for persistent state. On Railway we use the
+ * `/data` volume mount so state survives redeploys; locally we fall back
+ * to `./data/`. Everything persistent (SQLite file, per-user thumbnails,
+ * etc.) should live under this directory so operators only have to back
+ * up one thing.
+ */
+export function resolveDataDir(): string {
+    const railwayVolume = "/data";
+    try {
+        fs.accessSync(railwayVolume, fs.constants.W_OK);
+        return railwayVolume;
+    } catch {
+        const local = path.join(process.cwd(), "data");
+        fs.mkdirSync(local, { recursive: true });
+        return local;
+    }
+}
 
 function resolveDbPath(): string {
     const explicit = process.env.DB_PATH;
     if (explicit && explicit.trim()) return explicit;
-    // Railway volumes are conventionally mounted at /data. If that directory
-    // exists and is writable we use it; otherwise fall back to a local path.
-    const railwayVolume = "/data";
-    try {
-        fs.accessSync(railwayVolume, fs.constants.W_OK);
-        return path.join(railwayVolume, "pro-uploader.db");
-    } catch {
-        const local = path.join(process.cwd(), "data");
-        fs.mkdirSync(local, { recursive: true });
-        return path.join(local, "pro-uploader.db");
-    }
+    return path.join(resolveDataDir(), "pro-uploader.db");
 }
 
 let db: Database.Database | undefined;
@@ -62,8 +75,25 @@ function getDb(): Database.Database {
             updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
     `);
+    // Additive migrations: tolerate the column already existing on a fresh
+    // install (where CREATE TABLE above already includes it) and on repos
+    // that pre-dated this column.
+    addColumnIfMissing(db, "user_prefs", "screenshots_count", "INTEGER NOT NULL DEFAULT 0");
     console.log(`SQLite preferences DB opened at ${dbPath}`);
     return db;
+}
+
+function addColumnIfMissing(
+    database: Database.Database,
+    table: string,
+    column: string,
+    definition: string,
+): void {
+    const info = database.prepare(`PRAGMA table_info(${table})`).all() as Array<
+        { name: string }
+    >;
+    if (info.some((c) => c.name === column)) return;
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 interface Row {
@@ -73,6 +103,7 @@ interface Row {
     language: string;
     rename_prefix: string;
     rename_suffix: string;
+    screenshots_count: number;
 }
 
 function rowToPrefs(row: Row): UserPrefs {
@@ -83,6 +114,7 @@ function rowToPrefs(row: Row): UserPrefs {
         language: row.language === "en" ? "en" : "ar",
         renamePrefix: row.rename_prefix,
         renameSuffix: row.rename_suffix,
+        screenshotsCount: row.screenshots_count ?? 0,
     };
 }
 
@@ -108,15 +140,16 @@ export function updateUserPrefs(
         .prepare(
             `
             INSERT INTO user_prefs
-                (chat_id, upload_as_document, spoiler, language, rename_prefix, rename_suffix, updated_at)
+                (chat_id, upload_as_document, spoiler, language, rename_prefix, rename_suffix, screenshots_count, updated_at)
             VALUES
-                (@chatId, @uploadAsDocument, @spoiler, @language, @renamePrefix, @renameSuffix, strftime('%s','now'))
+                (@chatId, @uploadAsDocument, @spoiler, @language, @renamePrefix, @renameSuffix, @screenshotsCount, strftime('%s','now'))
             ON CONFLICT(chat_id) DO UPDATE SET
                 upload_as_document = excluded.upload_as_document,
                 spoiler            = excluded.spoiler,
                 language           = excluded.language,
                 rename_prefix      = excluded.rename_prefix,
                 rename_suffix      = excluded.rename_suffix,
+                screenshots_count  = excluded.screenshots_count,
                 updated_at         = strftime('%s','now')
             `,
         )
@@ -127,6 +160,7 @@ export function updateUserPrefs(
             language: next.language,
             renamePrefix: next.renamePrefix,
             renameSuffix: next.renameSuffix,
+            screenshotsCount: next.screenshotsCount,
         });
     return next;
 }
