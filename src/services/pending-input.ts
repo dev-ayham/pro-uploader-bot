@@ -8,7 +8,11 @@
 export type PendingInput =
     | { kind: "rename_prefix" }
     | { kind: "rename_suffix" }
-    | { kind: "thumbnail_photo" };
+    | { kind: "thumbnail_photo" }
+    | { kind: "admin_user_lookup" }
+    | { kind: "admin_ban" }
+    | { kind: "admin_unban" }
+    | { kind: "admin_broadcast" };
 
 const pending = new Map<number, PendingInput>();
 

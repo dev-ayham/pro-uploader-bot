@@ -1,4 +1,4 @@
-import { Bot, Context } from "grammy";
+import { Bot, Context, InlineKeyboard } from "grammy";
 import {
     aggregateStats,
     getAllChatIds,
@@ -9,6 +9,11 @@ import {
     setBanned,
 } from "../services/db";
 import { getAdminIds, isAdmin } from "../services/admin";
+import {
+    clearPendingInput,
+    getPendingInput,
+    setPendingInput,
+} from "../services/pending-input";
 
 function requireAdmin(ctx: Context): boolean {
     return isAdmin(ctx.chat?.id);
@@ -103,9 +108,294 @@ async function pingOpenAI(apiKey: string, model: string): Promise<{
 }
 
 /**
+ * Inline keyboard shown by /admin and reused as the "return to menu"
+ * target after each action. Two columns per row so each button stays
+ * wide enough to read comfortably on mobile.
+ */
+function buildAdminMenu(): InlineKeyboard {
+    return new InlineKeyboard()
+        .text("🤖 AI status", "admin:ai_status")
+        .text("📊 Stats", "admin:stats_all").row()
+        .text("🔎 User lookup", "admin:user")
+        .text("📢 Broadcast", "admin:broadcast").row()
+        .text("🚫 Ban", "admin:ban")
+        .text("✅ Unban", "admin:unban").row()
+        .text("📋 Bans list", "admin:bans");
+}
+
+function adminMenuHeader(): string {
+    const ids = getAdminIds();
+    return [
+        "🛠 <b>Admin menu</b>",
+        "",
+        `<b>Admins:</b> <code>${ids.join(", ")}</code>`,
+        "",
+        "اختر إجراءً من الأزرار:",
+    ].join("\n");
+}
+
+async function renderAdminMenu(ctx: Context): Promise<void> {
+    await ctx.reply(adminMenuHeader(), {
+        parse_mode: "HTML",
+        reply_markup: buildAdminMenu(),
+    });
+}
+
+// --- Action implementations ---------------------------------------------
+//
+// Each runXxx function is the single source of truth for an admin action.
+// Command handlers and callback-query handlers both delegate here so the
+// two surfaces can never drift.
+
+async function runAiStatus(ctx: Context): Promise<void> {
+    const apiKey = process.env.OPENAI_API_KEY || "";
+    const model = process.env.OPENAI_MODEL || "gpt-4.1-nano";
+    const limit = parseInt(process.env.AI_DAILY_LIMIT_PER_USER || "20", 10);
+    const chatId = ctx.chat?.id ?? 0;
+    const usedToday = chatId ? getAiCallsToday(chatId) : 0;
+
+    const keyPresent = apiKey.trim().length > 0;
+    const keyDisplay = keyPresent
+        ? `${apiKey.slice(0, 7)}…${apiKey.slice(-4)} (len=${apiKey.length})`
+        : "❌ غير موجود";
+
+    const lines = [
+        "<b>AI status</b>",
+        "",
+        `OPENAI_API_KEY: ${keyPresent ? "✅" : "❌"} <code>${keyDisplay}</code>`,
+        `Model: <code>${model}</code>`,
+        `Daily limit: <code>${limit}</code>`,
+        `Your usage today: <code>${usedToday}/${limit}</code>`,
+    ];
+
+    if (keyPresent) {
+        const ping = await pingOpenAI(apiKey, model);
+        lines.push(
+            `OpenAI ping: ${ping.ok ? "✅" : "❌"} <code>HTTP ${ping.status}</code> (${ping.latencyMs}ms)`,
+        );
+        if (!ping.ok) {
+            lines.push(
+                `<i>error:</i> <code>${escapeHtml(ping.message)}</code>`,
+            );
+        }
+    } else {
+        lines.push("OpenAI ping: <i>skipped (no key)</i>");
+    }
+
+    await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+}
+
+async function runStatsAll(ctx: Context): Promise<void> {
+    const s = aggregateStats();
+    const langs = s.perLanguage.length > 0
+        ? s.perLanguage.map((r) => `${r.language}=${r.count}`).join(", ")
+        : "—";
+    const lines = [
+        "📊 <b>Global stats</b>",
+        "",
+        `Users: <code>${s.totalUsers}</code>`,
+        `Banned: <code>${s.bannedUsers}</code>`,
+        `Total uploads: <code>${s.totalUploads}</code>`,
+        `AI calls today: <code>${s.aiCallsToday}</code>`,
+        `Active today (≥1 AI call): <code>${s.activeToday}</code>`,
+        `Languages: <code>${langs}</code>`,
+    ];
+    await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+}
+
+async function runBroadcast(ctx: Context, msg: string): Promise<void> {
+    const ids = getAllChatIds();
+    if (ids.length === 0) {
+        await ctx.reply("لا يوجد مستخدمون محفوظون بعد.");
+        return;
+    }
+    await ctx.reply(
+        `📣 جاري البث إلى <code>${ids.length}</code> مستخدم...`,
+        { parse_mode: "HTML" },
+    );
+    let ok = 0;
+    let failed = 0;
+    // Serial with small delay to stay well under Telegram's 30 msg/sec
+    // global rate limit. For a few thousand users this takes a couple
+    // of minutes at most and is simpler than a scheduler.
+    for (const id of ids) {
+        if (isBanned(id)) continue;
+        try {
+            await ctx.api.sendMessage(id, msg, {
+                link_preview_options: { is_disabled: true },
+            });
+            ok++;
+        } catch (err) {
+            failed++;
+            console.warn(
+                `broadcast failed for ${id}:`,
+                err instanceof Error ? err.message : err,
+            );
+        }
+        await new Promise((r) => setTimeout(r, 40));
+    }
+    await ctx.reply(
+        `✅ انتهى البث. نجاح: <code>${ok}</code> / فشل: <code>${failed}</code>`,
+        { parse_mode: "HTML" },
+    );
+}
+
+async function runUserLookup(ctx: Context, id: number): Promise<void> {
+    const prefs = getUserPrefs(id);
+    const calls = getAiCallsToday(id);
+    const banned = isBanned(id);
+    const joined = prefs.createdAt
+        ? new Date(prefs.createdAt * 1000).toISOString().slice(0, 10)
+        : "—";
+    const lines = [
+        `👤 <b>User <code>${id}</code></b>`,
+        "",
+        `Banned: ${banned ? "✅" : "❌"}`,
+        `Language: <code>${prefs.language}</code>`,
+        `Upload-as-doc: ${prefs.uploadAsDocument ? "on" : "off"}`,
+        `Screenshots: <code>${prefs.screenshotsCount}</code>`,
+        `Prefix: <code>${escapeHtml(prefs.renamePrefix || "—")}</code>`,
+        `Suffix: <code>${escapeHtml(prefs.renameSuffix || "—")}</code>`,
+        `Uploads: <code>${prefs.uploadsCount}</code>`,
+        `AI calls today: <code>${calls}</code>`,
+        `Joined: <code>${joined}</code>`,
+        `Last URL: <code>${escapeHtml((prefs.lastUrl || "—").slice(0, 80))}</code>`,
+    ];
+    await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+}
+
+async function runBan(
+    ctx: Context,
+    id: number,
+    reason: string,
+): Promise<void> {
+    if (isAdmin(id)) {
+        await ctx.reply("لا يمكن حظر مشرف آخر.");
+        return;
+    }
+    setBanned(id, true, reason);
+    const safeReason = escapeHtml(reason);
+    await ctx.reply(
+        `🚫 تم حظر <code>${id}</code>${safeReason ? ` — السبب: ${safeReason}` : ""}`,
+        { parse_mode: "HTML" },
+    );
+}
+
+async function runUnban(ctx: Context, id: number): Promise<void> {
+    if (!isBanned(id)) {
+        await ctx.reply(
+            `<code>${id}</code> غير موجود في قائمة الحظر.`,
+            { parse_mode: "HTML" },
+        );
+        return;
+    }
+    setBanned(id, false);
+    await ctx.reply(`✅ تم رفع الحظر عن <code>${id}</code>.`, {
+        parse_mode: "HTML",
+    });
+}
+
+async function runBans(ctx: Context): Promise<void> {
+    const rows = listBannedUsers();
+    if (rows.length === 0) {
+        await ctx.reply("لا يوجد محظورون حالياً.");
+        return;
+    }
+    const body = rows
+        .slice(0, 50)
+        .map((r) => {
+            const d = new Date(r.at * 1000).toISOString().slice(0, 10);
+            return `<code>${r.chatId}</code> — ${d}${
+                r.reason ? ` — ${escapeHtml(r.reason)}` : ""
+            }`;
+        })
+        .join("\n");
+    const header = `🚫 <b>Banned (${rows.length})</b>\n\n`;
+    await ctx.reply(header + body, { parse_mode: "HTML" });
+}
+
+// --- Pending-input handler for admin flows -----------------------------
+
+/**
+ * When an admin clicks e.g. "🔎 User lookup" we set a pending-input
+ * marker and ask them to type the chat_id. This function is called
+ * from the main message:text handler before settings' own pending-input
+ * check and consumes the next message as the answer.
+ *
+ * Returns true when it handled the message so the caller skips URL
+ * parsing / intent classification for that text.
+ */
+export async function handleAdminPendingInputIfAny(
+    ctx: Context,
+): Promise<boolean> {
+    if (!ctx.chat || !ctx.message?.text) return false;
+    const chatId = ctx.chat.id;
+    if (!isAdmin(chatId)) return false;
+    const pending = getPendingInput(chatId);
+    if (!pending) return false;
+    if (
+        pending.kind !== "admin_user_lookup" &&
+        pending.kind !== "admin_ban" &&
+        pending.kind !== "admin_unban" &&
+        pending.kind !== "admin_broadcast"
+    ) {
+        return false;
+    }
+
+    const text = ctx.message.text.trim();
+
+    // Any /command aborts the pending flow so the admin can escape
+    // without sending a dummy value.
+    if (text.startsWith("/")) {
+        clearPendingInput(chatId);
+        await ctx.reply("تم الإلغاء.");
+        return true;
+    }
+
+    clearPendingInput(chatId);
+
+    if (pending.kind === "admin_broadcast") {
+        await runBroadcast(ctx, text);
+        return true;
+    }
+
+    if (pending.kind === "admin_user_lookup") {
+        const id = Number.parseInt(text, 10);
+        if (!Number.isFinite(id) || id === 0) {
+            await ctx.reply("chat_id غير صالح.");
+            return true;
+        }
+        await runUserLookup(ctx, id);
+        return true;
+    }
+
+    if (pending.kind === "admin_unban") {
+        const id = Number.parseInt(text, 10);
+        if (!Number.isFinite(id) || id === 0) {
+            await ctx.reply("chat_id غير صالح.");
+            return true;
+        }
+        await runUnban(ctx, id);
+        return true;
+    }
+
+    // admin_ban — format: "<chat_id> [reason...]"
+    const firstSpace = text.indexOf(" ");
+    const idStr = firstSpace < 0 ? text : text.slice(0, firstSpace);
+    const reason = firstSpace < 0 ? "" : text.slice(firstSpace + 1).trim();
+    const id = Number.parseInt(idStr, 10);
+    if (!Number.isFinite(id) || id === 0) {
+        await ctx.reply("chat_id غير صالح.");
+        return true;
+    }
+    await runBan(ctx, id, reason);
+    return true;
+}
+
+/**
  * Register the admin-only command surface:
  *
- *   /admin          — show this menu
+ *   /admin          — show the inline admin menu
  *   /ai_status      — OpenAI env + live reachability
  *   /stats_all      — aggregate bot stats
  *   /broadcast ...  — send a message to every chat that ever used the bot
@@ -114,95 +404,28 @@ async function pingOpenAI(apiKey: string, model: string): Promise<{
  *   /unban <id>     — remove a chat_id from the banlist
  *   /bans           — list currently banned chat_ids
  *
+ * Callback queries on `admin:*` trigger the same action functions, so
+ * either flow (typed command or button press) behaves identically. The
+ * three commands that require an argument also accept a button-driven
+ * two-step flow via pending-input when invoked from the inline menu.
+ *
  * Every handler short-circuits with a silent return for non-admins so
  * casual users who guess a command name see nothing.
  */
 export function registerAdminHandlers(bot: Bot): void {
     bot.command("admin", async (ctx) => {
         if (!requireAdmin(ctx)) return;
-        const ids = getAdminIds();
-        const lines = [
-            "🛠 <b>Admin menu</b>",
-            "",
-            "/ai_status — فحص مفتاح OpenAI + الاتصال الحيّ",
-            "/stats_all — إحصائيات كل المستخدمين",
-            "/broadcast &lt;نص&gt; — إرسال رسالة لجميع المستخدمين",
-            "/user &lt;id&gt; — فحص إعدادات مستخدم محدد",
-            "/ban &lt;id&gt; [سبب] — حظر مستخدم",
-            "/unban &lt;id&gt; — رفع الحظر",
-            "/bans — قائمة المحظورين",
-            "",
-            `<b>Admins:</b> <code>${ids.join(", ")}</code>`,
-        ];
-        await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+        await renderAdminMenu(ctx);
     });
 
     bot.command("ai_status", async (ctx) => {
         if (!requireAdmin(ctx)) return;
-        const apiKey = process.env.OPENAI_API_KEY || "";
-        const model = process.env.OPENAI_MODEL || "gpt-4.1-nano";
-        const limit = parseInt(
-            process.env.AI_DAILY_LIMIT_PER_USER || "20",
-            10,
-        );
-        const chatId = ctx.chat?.id ?? 0;
-        const usedToday = chatId ? getAiCallsToday(chatId) : 0;
-
-        const keyPresent = apiKey.trim().length > 0;
-        const keyDisplay = keyPresent
-            ? `${apiKey.slice(0, 7)}…${apiKey.slice(-4)} (len=${apiKey.length})`
-            : "❌ غير موجود";
-
-        const lines = [
-            "<b>AI status</b>",
-            "",
-            `OPENAI_API_KEY: ${keyPresent ? "✅" : "❌"} <code>${keyDisplay}</code>`,
-            `Model: <code>${model}</code>`,
-            `Daily limit: <code>${limit}</code>`,
-            `Your usage today: <code>${usedToday}/${limit}</code>`,
-        ];
-
-        if (keyPresent) {
-            const ping = await pingOpenAI(apiKey, model);
-            lines.push(
-                `OpenAI ping: ${ping.ok ? "✅" : "❌"} <code>HTTP ${ping.status}</code> (${ping.latencyMs}ms)`,
-            );
-            if (!ping.ok) {
-                lines.push(
-                    `<i>error:</i> <code>${ping.message
-                        .replace(/&/g, "&amp;")
-                        .replace(/</g, "&lt;")
-                        .replace(/>/g, "&gt;")}</code>`,
-                );
-            }
-        } else {
-            lines.push(
-                "OpenAI ping: <i>skipped (no key)</i>",
-            );
-        }
-
-        await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+        await runAiStatus(ctx);
     });
 
     bot.command("stats_all", async (ctx) => {
         if (!requireAdmin(ctx)) return;
-        const s = aggregateStats();
-        const langs = s.perLanguage.length > 0
-            ? s.perLanguage
-                  .map((r) => `${r.language}=${r.count}`)
-                  .join(", ")
-            : "—";
-        const lines = [
-            "📊 <b>Global stats</b>",
-            "",
-            `Users: <code>${s.totalUsers}</code>`,
-            `Banned: <code>${s.bannedUsers}</code>`,
-            `Total uploads: <code>${s.totalUploads}</code>`,
-            `AI calls today: <code>${s.aiCallsToday}</code>`,
-            `Active today (≥1 AI call): <code>${s.activeToday}</code>`,
-            `Languages: <code>${langs}</code>`,
-        ];
-        await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+        await runStatsAll(ctx);
     });
 
     bot.command("broadcast", async (ctx) => {
@@ -215,40 +438,7 @@ export function registerAdminHandlers(bot: Bot): void {
             );
             return;
         }
-        const ids = getAllChatIds();
-        if (ids.length === 0) {
-            await ctx.reply("لا يوجد مستخدمون محفوظون بعد.");
-            return;
-        }
-        await ctx.reply(
-            `📣 جاري البث إلى <code>${ids.length}</code> مستخدم...`,
-            { parse_mode: "HTML" },
-        );
-        let ok = 0;
-        let failed = 0;
-        // Serial with small delay to stay well under Telegram's 30 msg/sec
-        // global rate limit. For a few thousand users this takes a couple
-        // of minutes at most and is simpler than a scheduler.
-        for (const id of ids) {
-            if (isBanned(id)) continue;
-            try {
-                await ctx.api.sendMessage(id, msg, {
-                    link_preview_options: { is_disabled: true },
-                });
-                ok++;
-            } catch (err) {
-                failed++;
-                console.warn(
-                    `broadcast failed for ${id}:`,
-                    err instanceof Error ? err.message : err,
-                );
-            }
-            await new Promise((r) => setTimeout(r, 40));
-        }
-        await ctx.reply(
-            `✅ انتهى البث. نجاح: <code>${ok}</code> / فشل: <code>${failed}</code>`,
-            { parse_mode: "HTML" },
-        );
+        await runBroadcast(ctx, msg);
     });
 
     bot.command("user", async (ctx) => {
@@ -262,27 +452,7 @@ export function registerAdminHandlers(bot: Bot): void {
             );
             return;
         }
-        const prefs = getUserPrefs(id);
-        const calls = getAiCallsToday(id);
-        const banned = isBanned(id);
-        const joined = prefs.createdAt
-            ? new Date(prefs.createdAt * 1000).toISOString().slice(0, 10)
-            : "—";
-        const lines = [
-            `👤 <b>User <code>${id}</code></b>`,
-            "",
-            `Banned: ${banned ? "✅" : "❌"}`,
-            `Language: <code>${prefs.language}</code>`,
-            `Upload-as-doc: ${prefs.uploadAsDocument ? "on" : "off"}`,
-            `Screenshots: <code>${prefs.screenshotsCount}</code>`,
-            `Prefix: <code>${escapeHtml(prefs.renamePrefix || "—")}</code>`,
-            `Suffix: <code>${escapeHtml(prefs.renameSuffix || "—")}</code>`,
-            `Uploads: <code>${prefs.uploadsCount}</code>`,
-            `AI calls today: <code>${calls}</code>`,
-            `Joined: <code>${joined}</code>`,
-            `Last URL: <code>${escapeHtml((prefs.lastUrl || "—").slice(0, 80))}</code>`,
-        ];
-        await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+        await runUserLookup(ctx, id);
     });
 
     bot.command("ban", async (ctx) => {
@@ -299,16 +469,7 @@ export function registerAdminHandlers(bot: Bot): void {
             );
             return;
         }
-        if (isAdmin(id)) {
-            await ctx.reply("لا يمكن حظر مشرف آخر.");
-            return;
-        }
-        setBanned(id, true, reason);
-        const safeReason = escapeHtml(reason);
-        await ctx.reply(
-            `🚫 تم حظر <code>${id}</code>${safeReason ? ` — السبب: ${safeReason}` : ""}`,
-            { parse_mode: "HTML" },
-        );
+        await runBan(ctx, id, reason);
     });
 
     bot.command("unban", async (ctx) => {
@@ -322,39 +483,100 @@ export function registerAdminHandlers(bot: Bot): void {
             );
             return;
         }
-        if (!isBanned(id)) {
-            await ctx.reply(
-                `<code>${id}</code> غير موجود في قائمة الحظر.`,
-                { parse_mode: "HTML" },
-            );
-            return;
-        }
-        setBanned(id, false);
-        await ctx.reply(`✅ تم رفع الحظر عن <code>${id}</code>.`, {
-            parse_mode: "HTML",
-        });
+        await runUnban(ctx, id);
     });
 
     bot.command("bans", async (ctx) => {
         if (!requireAdmin(ctx)) return;
-        const rows = listBannedUsers();
-        if (rows.length === 0) {
-            await ctx.reply("لا يوجد محظورون حالياً.");
+        await runBans(ctx);
+    });
+
+    // --- Callback queries from the inline menu --------------------------
+
+    bot.callbackQuery("admin:ai_status", async (ctx) => {
+        if (!requireAdmin(ctx)) {
+            await ctx.answerCallbackQuery();
             return;
         }
-        const body = rows
-            .slice(0, 50)
-            .map((r) => {
-                const d = new Date(r.at * 1000)
-                    .toISOString()
-                    .slice(0, 10);
-                return `<code>${r.chatId}</code> — ${d}${
-                    r.reason ? ` — ${escapeHtml(r.reason)}` : ""
-                }`;
-            })
-            .join("\n");
-        const header = `🚫 <b>Banned (${rows.length})</b>\n\n`;
-        await ctx.reply(header + body, { parse_mode: "HTML" });
+        await ctx.answerCallbackQuery();
+        await runAiStatus(ctx);
+    });
+
+    bot.callbackQuery("admin:stats_all", async (ctx) => {
+        if (!requireAdmin(ctx)) {
+            await ctx.answerCallbackQuery();
+            return;
+        }
+        await ctx.answerCallbackQuery();
+        await runStatsAll(ctx);
+    });
+
+    bot.callbackQuery("admin:bans", async (ctx) => {
+        if (!requireAdmin(ctx)) {
+            await ctx.answerCallbackQuery();
+            return;
+        }
+        await ctx.answerCallbackQuery();
+        await runBans(ctx);
+    });
+
+    // Arg-taking actions: arm pending-input and prompt for the value.
+    // The actual work runs from handleAdminPendingInputIfAny on the
+    // admin's next message. /anything cancels.
+    bot.callbackQuery("admin:user", async (ctx) => {
+        const chatId = ctx.chat?.id;
+        if (!chatId || !requireAdmin(ctx)) {
+            await ctx.answerCallbackQuery();
+            return;
+        }
+        setPendingInput(chatId, { kind: "admin_user_lookup" });
+        await ctx.answerCallbackQuery();
+        await ctx.reply(
+            "🔎 أرسل <code>chat_id</code> المستخدم المراد فحصه:\n<i>(أرسل /إلغاء لإيقاف العملية)</i>",
+            { parse_mode: "HTML" },
+        );
+    });
+
+    bot.callbackQuery("admin:ban", async (ctx) => {
+        const chatId = ctx.chat?.id;
+        if (!chatId || !requireAdmin(ctx)) {
+            await ctx.answerCallbackQuery();
+            return;
+        }
+        setPendingInput(chatId, { kind: "admin_ban" });
+        await ctx.answerCallbackQuery();
+        await ctx.reply(
+            "🚫 أرسل <code>chat_id [سبب]</code> — مثال: <code>123456789 spam</code>",
+            { parse_mode: "HTML" },
+        );
+    });
+
+    bot.callbackQuery("admin:unban", async (ctx) => {
+        const chatId = ctx.chat?.id;
+        if (!chatId || !requireAdmin(ctx)) {
+            await ctx.answerCallbackQuery();
+            return;
+        }
+        setPendingInput(chatId, { kind: "admin_unban" });
+        await ctx.answerCallbackQuery();
+        await ctx.reply(
+            "✅ أرسل <code>chat_id</code> الذي تريد رفع الحظر عنه:",
+            { parse_mode: "HTML" },
+        );
+    });
+
+    bot.callbackQuery("admin:broadcast", async (ctx) => {
+        const chatId = ctx.chat?.id;
+        if (!chatId || !requireAdmin(ctx)) {
+            await ctx.answerCallbackQuery();
+            return;
+        }
+        setPendingInput(chatId, { kind: "admin_broadcast" });
+        await ctx.answerCallbackQuery();
+        await ctx.reply(
+            "📢 أرسل نص الرسالة التي سيتم بثّها لكل المستخدمين:\n<i>(أرسل /إلغاء للخروج)</i>",
+            { parse_mode: "HTML" },
+        );
     });
 }
 
