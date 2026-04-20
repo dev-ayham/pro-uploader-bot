@@ -12,6 +12,10 @@ import {
     handlePendingInputIfAny,
     registerSettingsHandlers,
 } from "./handlers/settings";
+import {
+    publishBotCommands,
+    registerMenuHandlers,
+} from "./handlers/menu";
 import { closeDb, getUserPrefs } from "./services/db";
 import { generateScreenshots } from "./services/screenshots";
 import {
@@ -186,7 +190,8 @@ function escapeHtmlForMsg(s: string): string {
 }
 
 // --- Bot Handlers ---
-bot.command("start", (ctx) => ctx.reply(strings.ar.welcome));
+// /start, /menu, /help, /about, /cancel and the top-level inline nav.
+registerMenuHandlers(bot);
 
 // /settings, /settings callback_query handlers etc.
 registerSettingsHandlers(bot);
@@ -428,6 +433,10 @@ bot.start({
     allowed_updates: ["message", "callback_query"],
     onStart: (me) => {
         console.log(`Bot @${me.username} is polling on port ${port}...`);
+        // Publish the Telegram /-command menu once the bot is live. Failure
+        // here is logged inside publishBotCommands and must not block the
+        // main polling loop.
+        void publishBotCommands(bot);
     },
 }).catch((err) => {
     console.error("bot.start() failed:", err);
