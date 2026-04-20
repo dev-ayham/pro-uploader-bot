@@ -137,6 +137,23 @@ async function withStallGuard<T>(
     }
 }
 
+/**
+ * Give up on `messages.sendMedia(InputMediaDocumentExternal)` after this
+ * long. Telegram's DC tries to fetch the URL server-side before replying;
+ * for unreachable CDNs (FASELHD edge nodes, private storage, expired
+ * links) that can take 5–10 minutes to surface a `WEBPAGE_CURL_FAILED`,
+ * during which the user's chat is frozen and the global concurrency slot
+ * is held. 20 s is comfortably longer than a healthy Telegram fetch
+ * (which typically completes in under a second) but short enough that a
+ * bad CDN falls through to the legacy download+upload path almost
+ * immediately.
+ */
+const EXTERNAL_URL_TIMEOUT_MS = (() => {
+    const raw = process.env.EXTERNAL_URL_TIMEOUT_MS;
+    const n = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 20_000;
+})();
+
 export interface UploadProgress {
     phase: "download" | "upload";
     fraction: number;
@@ -540,19 +557,74 @@ export class MTProtoUploader {
                 // and rely on its own 2 GB cap.
             }
         }
+        // Race the sendFile against a hard timeout. When Telegram cannot
+        // reach the source CDN (e.g. FASELHD edge nodes that block
+        // non-browser UAs), `messages.sendMedia(InputMediaDocumentExternal)`
+        // can hang for ~10 minutes before the DC finally replies with
+        // WEBPAGE_CURL_FAILED. During that window the chat's upload slot
+        // is held and the user sees total silence. We instead give up
+        // after `EXTERNAL_URL_TIMEOUT_MS` (default 20 s) and fall through
+        // to the local download+upload path, so slow CDNs degrade
+        // gracefully instead of looking like a dead bot.
+        //
+        // GramJS has no cancellation, so the abandoned `sendFile` keeps
+        // running in the background. If Telegram eventually accepts the
+        // URL *after* we've already started the fallback download+upload,
+        // the user would receive the same file twice. To prevent that we
+        // attach a late-success handler that deletes the duplicate
+        // message from the chat once it arrives.
+        let timedOut = false;
+        const sendPromise = this.client.sendFile(chatId, {
+            file: url,
+            caption,
+            parseMode: "html",
+            forceDocument: options.asDocument === true,
+        });
+        sendPromise.then(
+            (msg) => {
+                if (!timedOut) return;
+                const id = (msg as { id?: unknown } | null | undefined)?.id;
+                if (typeof id !== "number" && typeof id !== "bigint") return;
+                this.client
+                    .deleteMessages(chatId, [Number(id)], { revoke: true })
+                    .catch((err: unknown) => {
+                        console.warn(
+                            `[external-url] failed to delete late duplicate: ${
+                                err instanceof Error
+                                    ? err.message
+                                    : String(err)
+                            }`,
+                        );
+                    });
+            },
+            // Swallow late rejections so Node doesn't raise
+            // UnhandledPromiseRejection after we've already fallen back.
+            () => {},
+        );
         try {
-            await this.client.sendFile(chatId, {
-                file: url,
-                caption,
-                parseMode: "html",
-                forceDocument: options.asDocument === true,
+            await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    timedOut = true;
+                    reject(new Error("external-url timeout"));
+                }, EXTERNAL_URL_TIMEOUT_MS);
+                sendPromise.then(
+                    () => {
+                        clearTimeout(timer);
+                        resolve();
+                    },
+                    (err) => {
+                        clearTimeout(timer);
+                        reject(err);
+                    },
+                );
             });
             return true;
         } catch (err) {
             // Log enough detail that we can tell whether Telegram is
             // rejecting the CDN (WEBPAGE_CURL_FAILED / WEBPAGE_MEDIA_EMPTY),
-            // the file is too big (FILE_PART_*_MISSING), or something
-            // unrelated happened. The caller will retry via download+upload.
+            // the file is too big (FILE_PART_*_MISSING), our own timeout
+            // fired, or something unrelated happened. The caller will
+            // retry via download+upload.
             console.warn(
                 `[external-url] Telegram rejected direct fetch for ${url}: ${
                     err instanceof Error ? err.message : String(err)
