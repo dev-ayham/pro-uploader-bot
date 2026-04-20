@@ -89,6 +89,8 @@ interface Strings {
     success: string;
     error: string;
     invalid_url: string;
+    profile_link_not_supported: string;
+    unsupported_url: string;
     already_in_flight: string;
     duplicate_ignored: string;
     screenshots_caption: (n: number) => string;
@@ -250,6 +252,12 @@ const ar: Strings = {
     success: "✅ تم الرفع بنجاح!",
     error: "❌ حدث خطأ أثناء الرفع.",
     invalid_url: "⚠️ لم أجد رابطاً صالحاً في الرسالة.",
+    profile_link_not_supported:
+        "📷 هذا رابط حساب انستغرام وليس منشوراً.\n\n" +
+        "أرسل رابط منشور ( /p/… )، ريل ( /reel/… )، أو IGTV ( /tv/… ) وسأقوم بتحميله.",
+    unsupported_url:
+        "⚠️ هذا الرابط غير مدعوم حالياً.\n\n" +
+        "المنصّات المدعومة: Instagram / YouTube / TikTok / Twitter / Facebook / Reddit / Vimeo / SoundCloud — أو أي رابط مباشر لملف.",
     already_in_flight: "⏳ لديك رفع قيد التنفيذ. انتظر حتى ينتهي.",
     duplicate_ignored: "ℹ️ تم تجاهل رابط مكرر.",
     screenshots_caption: (n) => `🖼️ ${n} لقطات من الفيديو`,
@@ -429,6 +437,12 @@ const en: Strings = {
     success: "✅ Upload complete!",
     error: "❌ Upload failed.",
     invalid_url: "⚠️ No valid URL found in your message.",
+    profile_link_not_supported:
+        "📷 That's an Instagram profile link, not a post.\n\n" +
+        "Send a post ( /p/… ), reel ( /reel/… ), or IGTV ( /tv/… ) URL and I'll download it.",
+    unsupported_url:
+        "⚠️ This URL isn't supported yet.\n\n" +
+        "Supported platforms: Instagram / YouTube / TikTok / Twitter / Facebook / Reddit / Vimeo / SoundCloud — or any direct file URL.",
     already_in_flight: "⏳ You already have an upload in progress. Please wait.",
     duplicate_ignored: "ℹ️ Duplicate link ignored.",
     screenshots_caption: (n) => `🖼️ ${n} screenshots from the video`,
@@ -609,6 +623,12 @@ const tr: Strings = {
     success: "✅ Yukleme tamamlandi!",
     error: "❌ Yukleme basarisiz.",
     invalid_url: "⚠️ Mesajinizda gecerli bir URL bulunamadi.",
+    profile_link_not_supported:
+        "📷 Bu bir Instagram profil linki, gönderi değil.\n\n" +
+        "Bir gönderi ( /p/… ), reel ( /reel/… ) veya IGTV ( /tv/… ) linki gönder, indirebilirim.",
+    unsupported_url:
+        "⚠️ Bu URL şu anda desteklenmiyor.\n\n" +
+        "Desteklenen platformlar: Instagram / YouTube / TikTok / Twitter / Facebook / Reddit / Vimeo / SoundCloud — veya herhangi bir doğrudan dosya bağlantısı.",
     already_in_flight: "⏳ Zaten devam eden bir yuklemeniz var. Lutfen bekleyin.",
     duplicate_ignored: "ℹ️ Tekrarlanan link yok sayildi.",
     screenshots_caption: (n) => `🖼️ Videodan ${n} ekran goruntusu`,
@@ -788,6 +808,12 @@ const fr: Strings = {
     success: "✅ Upload termine !",
     error: "❌ Erreur lors de l'upload.",
     invalid_url: "⚠️ Aucun URL valide trouve.",
+    profile_link_not_supported:
+        "📷 C'est un lien de profil Instagram, pas une publication.\n\n" +
+        "Envoyez l'URL d'une publication ( /p/… ), d'un reel ( /reel/… ) ou d'un IGTV ( /tv/… ) et je la téléchargerai.",
+    unsupported_url:
+        "⚠️ Cette URL n'est pas prise en charge pour le moment.\n\n" +
+        "Plateformes prises en charge : Instagram / YouTube / TikTok / Twitter / Facebook / Reddit / Vimeo / SoundCloud — ou tout lien direct vers un fichier.",
     already_in_flight: "⏳ Un upload est deja en cours. Veuillez patienter.",
     duplicate_ignored: "ℹ️ Lien en double ignore.",
     screenshots_caption: (n) => `🖼️ ${n} captures de la video`,
@@ -967,6 +993,12 @@ const es: Strings = {
     success: "✅ Carga completada!",
     error: "❌ Error en la carga.",
     invalid_url: "⚠️ No se encontro un URL valido.",
+    profile_link_not_supported:
+        "📷 Ese es un enlace de perfil de Instagram, no una publicación.\n\n" +
+        "Envía la URL de una publicación ( /p/… ), reel ( /reel/… ) o IGTV ( /tv/… ) y la descargaré.",
+    unsupported_url:
+        "⚠️ Esta URL aún no es compatible.\n\n" +
+        "Plataformas compatibles: Instagram / YouTube / TikTok / Twitter / Facebook / Reddit / Vimeo / SoundCloud — o cualquier enlace directo a un archivo.",
     already_in_flight: "⏳ Ya tienes una carga en curso. Espera.",
     duplicate_ignored: "ℹ️ Enlace duplicado ignorado.",
     screenshots_caption: (n) => `🖼️ ${n} capturas del video`,

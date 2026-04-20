@@ -7,14 +7,12 @@ import type { InputMediaPhoto } from "grammy/types";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { MTProtoUploader, UploadProgress } from "./services/mtproto-uploader";
-import { shouldUseYtDlp, YtDlpOptions } from "./services/downloader";
 import {
-    extractInstagramUsername,
-    fetchInstagramProfile,
-    InstagramRateLimitedError,
-    InstagramUserNotFoundError,
-    type InstagramProfile,
-} from "./services/instagram-profile";
+    isDirectFileUrl,
+    shouldUseYtDlp,
+    YtDlpOptions,
+} from "./services/downloader";
+import { extractInstagramUsername } from "./services/instagram-profile";
 import {
     handlePendingInputIfAny,
     registerSettingsHandlers,
@@ -671,145 +669,6 @@ function getPendingUpload(chatId: number): PendingUpload | undefined {
 }
 
 /**
- * Shorten large integers (followers, etc.) to compact strings like
- * `1.2K` / `37.5M`. Keeps the profile caption legible on narrow
- * phones while still being obvious at a glance.
- */
-function formatCount(n: number): string {
-    if (!Number.isFinite(n) || n < 0) return "0";
-    if (n < 1000) return String(n);
-    if (n < 1_000_000) return (n / 1000).toFixed(n < 10_000 ? 1 : 0) + "K";
-    if (n < 1_000_000_000) return (n / 1_000_000).toFixed(1) + "M";
-    return (n / 1_000_000_000).toFixed(1) + "B";
-}
-
-function escapeHtml(s: string): string {
-    return s
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-}
-
-/**
- * Render a profile card (photo + rich caption) for an Instagram
- * username and expose an inline "HD profile picture as a document"
- * button so the admin/user can grab the original. Returns true iff
- * the URL was actually handled as a profile (so the caller can skip
- * the quality menu / yt-dlp path).
- */
-async function handleInstagramProfile(
-    ctx: Context,
-    username: string,
-): Promise<void> {
-    if (!ctx.chat) return;
-
-    let profile: InstagramProfile;
-    try {
-        profile = await fetchInstagramProfile(
-            username,
-            ytDlpOptions.cookiesFile,
-        );
-    } catch (err) {
-        if (err instanceof InstagramUserNotFoundError) {
-            await ctx.reply(
-                `❌ لم أجد حساب <code>@${escapeHtml(username)}</code> على انستغرام.`,
-                { parse_mode: "HTML" },
-            );
-            return;
-        }
-        if (err instanceof InstagramRateLimitedError) {
-            const hint =
-                err.status === 429
-                    ? "تجاوزنا حد الطلبات من جهة انستغرام"
-                    : "الكوكيز منتهية أو مفقودة";
-            await ctx.reply(
-                `⚠️ انستغرام رفض الطلب (HTTP ${err.status} — ${hint}). حاول بعد قليل.`,
-            );
-            return;
-        }
-        console.error(
-            `[instagram-profile] failed for @${username}:`,
-            err,
-        );
-        await ctx.reply("❌ تعذّر جلب معلومات الحساب. حاول مرة أخرى لاحقاً.");
-        return;
-    }
-
-    const badge = profile.isVerified ? " ✅" : "";
-    const privacy = profile.isPrivate ? "🔒 حساب خاص" : "🌐 حساب عام";
-    const bioLine = profile.biography
-        ? `\n📝 <i>${escapeHtml(profile.biography)}</i>`
-        : "";
-    const externalLine = profile.externalUrl
-        ? `\n🔗 <a href="${escapeHtml(profile.externalUrl)}">${escapeHtml(
-              profile.externalUrl,
-          )}</a>`
-        : "";
-
-    const caption =
-        `💻 <b>معلومات الحساب:</b>\n\n` +
-        `👤 المعرّف: <a href="https://www.instagram.com/${encodeURIComponent(
-            profile.username,
-        )}/">@${escapeHtml(profile.username)}</a>${badge}\n` +
-        `🏷️ الاسم: ${escapeHtml(profile.fullName) || "-"}\n` +
-        `📸 المنشورات: <b>${formatCount(profile.postsCount)}</b>\n` +
-        `👥 المتابعون: <b>${formatCount(profile.followers)}</b>\n` +
-        `➡️ يتابع: <b>${formatCount(profile.following)}</b>\n` +
-        `${privacy}` +
-        bioLine +
-        externalLine;
-
-    // Build the keyboard incrementally: the HD-picture button is only
-    // safe to include when the URL is non-empty, since grammy's
-    // InlineKeyboard.url() accepts any string but the Bot API rejects
-    // buttons with an empty `url` (HTTP 400). Instagram occasionally
-    // omits both fields for deactivated / minimal accounts, and an
-    // unguarded .url("", ...) used to cascade into a failure on the
-    // photo send AND on the text-only fallback (both were built with
-    // the same broken keyboard).
-    const hdPicUrl = profile.profilePicUrl || profile.profilePicUrlMedium;
-    const kb = new InlineKeyboard();
-    if (hdPicUrl) {
-        kb.url("📸 فتح الصورة بدقة عالية", hdPicUrl).row();
-    }
-    kb.url(
-        "🌐 فتح الحساب على انستغرام",
-        `https://www.instagram.com/${encodeURIComponent(
-            profile.username,
-        )}/`,
-    );
-
-    try {
-        const photoUrl =
-            profile.profilePicUrlMedium || profile.profilePicUrl;
-        if (photoUrl) {
-            await ctx.replyWithPhoto(photoUrl, {
-                caption,
-                parse_mode: "HTML",
-                reply_markup: kb,
-            });
-        } else {
-            await ctx.reply(caption, {
-                parse_mode: "HTML",
-                reply_markup: kb,
-            });
-        }
-    } catch (err) {
-        // Telegram occasionally refuses Instagram CDN URLs (size /
-        // expiry). Fall back to a text-only reply so the metadata
-        // still reaches the user.
-        console.warn(
-            "[instagram-profile] sendPhoto failed, falling back to text:",
-            err,
-        );
-        await ctx.reply(caption, {
-            parse_mode: "HTML",
-            reply_markup: kb,
-        });
-    }
-}
-
-/**
  * Render the quality / format inline keyboard and remember the pending URL
  * so the subsequent callback_query knows what to download. We do NOT embed
  * the URL in callback_data — Telegram limits that field to 64 bytes. We
@@ -1009,12 +868,21 @@ bot.on("message:text", async (ctx) => {
 
     // Instagram profile URLs (`instagram.com/<username>` with no /p/,
     // /reel/, /tv/, /stories/ segment) carry no downloadable media on
-    // their own. Render a profile card (photo + stats + links) instead
-    // of handing the URL to yt-dlp, which would just error out with
-    // "Unable to extract data".
+    // their own. Tell the user clearly — the profile-info feature is
+    // disabled for now (Instagram IP-blocks our host) and will be
+    // revisited as a separate bot later.
     const igUsername = extractInstagramUsername(url);
     if (igUsername) {
-        await handleInstagramProfile(ctx, igUsername);
+        await ctx.reply(s.profile_link_not_supported);
+        return;
+    }
+
+    // Obvious junk URLs (localhost, raw IPs, unknown TLDs that are also
+    // not direct-file URLs) are rejected up-front with a friendly
+    // message rather than being handed to yt-dlp which would error out
+    // with a technical "Unsupported URL" message.
+    if (!shouldUseYtDlp(url) && !isDirectFileUrl(url)) {
+        await ctx.reply(s.unsupported_url);
         return;
     }
 
