@@ -1,7 +1,10 @@
-import { TelegramClient } from "telegram";
+import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions";
 import { CustomFile } from "telegram/client/uploads";
+import { HTMLParser } from "telegram/extensions/html";
+import { generateRandomLong } from "telegram/Helpers";
 import * as fs from "fs";
+import * as mime from "mime-types";
 import {
     DownloadResult,
     downloadDirect,
@@ -15,6 +18,13 @@ const TEMP_DIR = "/tmp";
 export interface UploadProgress {
     phase: "download" | "upload";
     fraction: number;
+}
+
+export interface UploadOptions {
+    /** Force the file to be sent as a generic document (no video preview). */
+    asDocument?: boolean;
+    /** Send the media with Telegram's spoiler ("click to reveal") overlay. */
+    spoiler?: boolean;
 }
 
 export class MTProtoUploader {
@@ -50,6 +60,7 @@ export class MTProtoUploader {
         url: string,
         caption: string,
         onProgress?: (progress: UploadProgress) => void,
+        options: UploadOptions = {},
     ): Promise<void> {
         await this.readyPromise;
 
@@ -83,15 +94,31 @@ export class MTProtoUploader {
                 downloaded.filePath,
             );
 
-            await this.client.sendFile(chatId, {
-                file: toUpload,
-                caption,
-                parseMode: "html",
-                workers: 4,
-                progressCallback: (progress) => {
-                    onProgress?.({ phase: "upload", fraction: progress });
-                },
-            });
+            if (options.spoiler) {
+                // GramJS's high-level sendFile() does not expose the spoiler
+                // flag, so we drop to raw API: upload the bytes, build an
+                // InputMediaUploadedDocument with spoiler (+forceFile when
+                // asDocument is also requested), then messages.SendMedia it.
+                await this.sendWithSpoiler(
+                    chatId,
+                    toUpload,
+                    downloaded.filename,
+                    caption,
+                    options.asDocument === true,
+                    onProgress,
+                );
+            } else {
+                await this.client.sendFile(chatId, {
+                    file: toUpload,
+                    caption,
+                    parseMode: "html",
+                    forceDocument: options.asDocument === true,
+                    workers: 4,
+                    progressCallback: (progress) => {
+                        onProgress?.({ phase: "upload", fraction: progress });
+                    },
+                });
+            }
         } finally {
             if (downloaded) {
                 try {
@@ -101,5 +128,69 @@ export class MTProtoUploader {
                 }
             }
         }
+    }
+
+    private async sendWithSpoiler(
+        chatId: number | string,
+        file: CustomFile,
+        filename: string,
+        captionHtml: string,
+        forceFile: boolean,
+        onProgress?: (progress: UploadProgress) => void,
+    ): Promise<void> {
+        const mimeType =
+            (mime.lookup(filename) as string) || "application/octet-stream";
+
+        const uploadedFile = await this.client.uploadFile({
+            file,
+            workers: 4,
+            onProgress: (progress) => {
+                // GramJS's raw uploadFile reports progress as a BigInteger-ish
+                // fraction in [0,1].
+                const fraction =
+                    typeof progress === "number" ? progress : Number(progress);
+                onProgress?.({ phase: "upload", fraction });
+            },
+        });
+
+        const attributes: Api.TypeDocumentAttribute[] = [
+            new Api.DocumentAttributeFilename({ fileName: filename }),
+        ];
+        if (!forceFile && mimeType.startsWith("video/")) {
+            // Keep video playable inside Telegram. Real dimensions / duration
+            // would require probing with ffprobe; 0s are accepted and the
+            // client computes them on demand.
+            attributes.push(
+                new Api.DocumentAttributeVideo({
+                    duration: 0,
+                    w: 0,
+                    h: 0,
+                    supportsStreaming: true,
+                }),
+            );
+        }
+
+        const media = new Api.InputMediaUploadedDocument({
+            file: uploadedFile,
+            mimeType,
+            attributes,
+            spoiler: true,
+            forceFile,
+        });
+
+        // HTML entities must be pre-parsed because messages.SendMedia doesn't
+        // take a parseMode of its own.
+        const [parsedText, entities] = HTMLParser.parse(captionHtml);
+
+        const peer = await this.client.getInputEntity(chatId);
+        await this.client.invoke(
+            new Api.messages.SendMedia({
+                peer,
+                media,
+                message: parsedText,
+                entities,
+                randomId: generateRandomLong(),
+            }),
+        );
     }
 }
