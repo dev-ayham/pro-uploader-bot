@@ -17,6 +17,7 @@ import {
     registerMenuHandlers,
 } from "./handlers/menu";
 import { closeDb, getUserPrefs } from "./services/db";
+import { t } from "./i18n";
 import { generateScreenshots } from "./services/screenshots";
 import {
     hasThumbnail,
@@ -78,27 +79,12 @@ const ytDlpOptions: YtDlpOptions = {
 const bot = new Bot(botToken);
 const uploader = new MTProtoUploader(apiId, apiHash, botToken, ytDlpOptions);
 
-// --- i18n Simulation (Professional UI) ---
-const strings = {
-    ar: {
-        welcome:
-            "👋 أهلاً بك في بوت الرفع الاحترافي!\n\nأرسل لي أي رابط وسأقوم برفعه لك إلى تيليجرام (يدعم حتى 2 جيجابايت).\n\nالمنصات المدعومة:\n• روابط مباشرة (mp4, mkv, pdf, zip...)\n• Instagram / Reels / Stories\n• YouTube / Shorts\n• TikTok\n• Twitter / X\n• Facebook / Reddit / Vimeo / Twitch / SoundCloud\n\nاستخدم /settings لتخصيص طريقة الرفع.",
-        settings_hint:
-            "استخدم /settings لتخصيص طريقة الرفع (Document / Spoiler / لغة...).",
-
-        processing: "⏳ جاري المعالجة...",
-        extracting: "🔍 جاري استخراج الفيديو من المنصة...",
-        downloading: (p: number) => `📥 جاري التحميل: ${Math.round(p * 100)}%`,
-        uploading: (p: number) => `📤 جاري الرفع إلى تيليجرام: ${Math.round(p * 100)}%`,
-        success: "✅ تم الرفع بنجاح!",
-        error: "❌ حدث خطأ أثناء الرفع.",
-        invalid_url: "⚠️ عذراً، لم أجد رابطاً صالحاً في الرسالة.",
-        already_in_flight:
-            "⏳ لديك رفع قيد التنفيذ بالفعل. انتظر حتى ينتهي ثم أرسل الرابط الجديد.",
-        duplicate_ignored:
-            "ℹ️ تم تجاهل رابط مكرر (نفس الرابط الذي أرسلته قبل قليل).",
-    },
-};
+// All user-facing strings live in src/i18n.ts. Fetch them per chat at the
+// point of rendering so the user's stored language preference is honoured
+// even when the same code path serves multiple chats concurrently.
+function langOf(chatId: number) {
+    return getUserPrefs(chatId).language;
+}
 
 // Track uploads that are currently being processed so we never start two
 // uploads in parallel for the same chat, and we silently drop any update that
@@ -141,18 +127,19 @@ async function sendScreenshots(
     const ext = path.extname(filename).toLowerCase();
     if (!VIDEO_EXTS.has(ext)) return;
     if (!ctx.chat) return;
+    const s = t(langOf(ctx.chat.id));
     let shots: string[] = [];
     try {
         shots = await generateScreenshots(filePath, count, os.tmpdir());
         if (shots.length === 0) {
-            await ctx.reply("⚠️ تعذّر استخراج لقطات من الفيديو.");
+            await ctx.reply(s.screenshots_none);
             return;
         }
         // Telegram albums take 2-10 items. If count<2 we still want to show
         // the single shot as a standalone photo.
         if (shots.length === 1) {
             await ctx.replyWithPhoto(new InputFile(shots[0]), {
-                caption: "🖼️ لقطة من الفيديو",
+                caption: s.screenshots_single,
             });
         } else {
             // sendMediaGroup caps at 10 items per call; our cycle is [0,3,5,10]
@@ -160,17 +147,16 @@ async function sendScreenshots(
             const media: InputMediaPhoto[] = shots.slice(0, 10).map((p, i) => ({
                 type: "photo",
                 media: new InputFile(p),
-                caption: i === 0 ? `🖼️ ${shots.length} لقطات من الفيديو` : undefined,
+                caption: i === 0 ? s.screenshots_caption(shots.length) : undefined,
             }));
             await ctx.replyWithMediaGroup(media);
         }
     } catch (err) {
         console.error("sendScreenshots failed:", err);
         const detail = err instanceof Error ? err.message : String(err);
-        await ctx.reply(
-            `⚠️ فشل استخراج اللقطات: <code>${escapeHtmlForMsg(detail)}</code>`,
-            { parse_mode: "HTML" },
-        );
+        await ctx.reply(s.screenshots_fail(escapeHtmlForMsg(detail)), {
+            parse_mode: "HTML",
+        });
     } finally {
         for (const p of shots) {
             try {
@@ -227,17 +213,16 @@ bot.on("message:photo", async (ctx) => {
         fs.writeFileSync(tmpPath, buffer);
         await saveThumbnailFromFile(chatId, tmpPath);
         clearPendingInput(chatId);
-        await ctx.reply(
-            "✅ تم حفظ الصورة المصغّرة. ستُستخدم لجميع الملفات القادمة. افتح /settings للإدارة.",
-        );
+        const s = t(langOf(chatId));
+        await ctx.reply(s.thumb_saved);
     } catch (err) {
         console.error("thumbnail save failed:", err);
         const detail = err instanceof Error ? err.message : String(err);
         clearPendingInput(chatId);
-        await ctx.reply(
-            `❌ تعذّر حفظ الصورة المصغّرة: <code>${escapeHtmlForMsg(detail)}</code>`,
-            { parse_mode: "HTML" },
-        );
+        const s = t(langOf(chatId));
+        await ctx.reply(s.thumb_save_error(escapeHtmlForMsg(detail)), {
+            parse_mode: "HTML",
+        });
     } finally {
         if (tmpPath) {
             try {
@@ -261,8 +246,9 @@ bot.on("message:text", async (ctx) => {
     const urlPattern = /https?:\/\/[^\s]+/;
     const match = text.match(urlPattern);
 
+    const s = t(langOf(ctx.chat.id));
     if (!match) {
-        return ctx.reply(strings.ar.invalid_url);
+        return ctx.reply(s.invalid_url);
     }
 
     // De-dup: Telegram Bot API occasionally re-delivers the same update after
@@ -277,7 +263,7 @@ bot.on("message:text", async (ctx) => {
     // If the same user already has an upload running, refuse rather than
     // running two MTProto uploads in parallel for the same session.
     if (inFlightChats.has(ctx.chat.id)) {
-        await ctx.reply(strings.ar.already_in_flight);
+        await ctx.reply(s.already_in_flight);
         return;
     }
 
@@ -287,7 +273,7 @@ bot.on("message:text", async (ctx) => {
     // second one as an accidental double-send.
     const prev = recentUrls.get(ctx.chat.id);
     if (prev && prev.url === url && Date.now() - prev.at < 30_000) {
-        await ctx.reply(strings.ar.duplicate_ignored);
+        await ctx.reply(s.duplicate_ignored);
         return;
     }
     recentUrls.set(ctx.chat.id, { url, at: Date.now() });
@@ -301,8 +287,8 @@ bot.on("message:text", async (ctx) => {
     inFlightChats.add(ctx.chat.id);
     try {
         const initialText = shouldUseYtDlp(url)
-            ? strings.ar.extracting
-            : strings.ar.processing;
+            ? s.extracting
+            : s.processing;
 
         // If even the first status reply fails we still want the bot to
         // recover gracefully, so catch the inner failure and just log.
@@ -354,8 +340,8 @@ bot.on("message:text", async (ctx) => {
                     lastBucket = { phase: progress.phase, bucket };
                     const text =
                         progress.phase === "download"
-                            ? strings.ar.downloading(progress.fraction)
-                            : strings.ar.uploading(progress.fraction);
+                            ? s.downloading(progress.fraction)
+                            : s.uploading(progress.fraction);
                     await editStatus(text);
                 },
                 {
@@ -380,7 +366,7 @@ bot.on("message:text", async (ctx) => {
                 },
             );
 
-            await editStatus(strings.ar.success);
+            await editStatus(s.success);
         } catch (error) {
             console.error("Upload failed:", error);
             const detail =
@@ -392,7 +378,7 @@ bot.on("message:text", async (ctx) => {
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;");
             await editStatus(
-                `${strings.ar.error}\n\n<code>${escaped}</code>`,
+                `${s.error}\n\n<code>${escaped}</code>`,
                 "HTML",
             );
         }

@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import * as fs from "fs";
 import * as path from "path";
+import { Lang, SUPPORTED_LANGS } from "../i18n";
 
 /**
  * Per-chat user preferences that persist across deploys.
@@ -14,7 +15,7 @@ export interface UserPrefs {
     chatId: number;
     uploadAsDocument: boolean;
     spoiler: boolean;
-    language: "ar" | "en";
+    language: Lang;
     renamePrefix: string;
     renameSuffix: string;
     /** How many equidistant frames to attach as an album after a video
@@ -111,7 +112,11 @@ function rowToPrefs(row: Row): UserPrefs {
         chatId: row.chat_id,
         uploadAsDocument: !!row.upload_as_document,
         spoiler: !!row.spoiler,
-        language: row.language === "en" ? "en" : "ar",
+        // Coerce to a supported locale; unknown codes (e.g. from a very old
+        // row or hand-edited DB) fall back to Arabic.
+        language: (SUPPORTED_LANGS as readonly string[]).includes(row.language)
+            ? (row.language as Lang)
+            : "ar",
         renamePrefix: row.rename_prefix,
         renameSuffix: row.rename_suffix,
         screenshotsCount: row.screenshots_count ?? 0,
