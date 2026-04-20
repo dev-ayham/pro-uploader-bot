@@ -4,62 +4,68 @@ import { CustomFile } from "telegram/client/uploads";
 import axios from "axios";
 import * as fs from "fs";
 import * as path from "path";
-import { Api } from "telegram";
 
 export class MTProtoUploader {
     private client: TelegramClient;
+    private readyPromise: Promise<void>;
 
     constructor(apiId: number, apiHash: string, botToken: string) {
         this.client = new TelegramClient(new StringSession(""), apiId, apiHash, {
             connectionRetries: 5,
         });
-        this.client.start({
-            botAuthToken: botToken,
-        });
+        this.readyPromise = this.client
+            .start({ botAuthToken: botToken })
+            .then(() => undefined);
     }
 
-    async uploadFromUrl(chatId: number | string, url: string, caption: string, progressCallback?: (progress: number) => void) {
-        try {
-            const filename = path.basename(new URL(url).pathname) || "file";
-            const tempPath = path.join("/tmp", `${Date.now()}_${filename}`);
+    async ready(): Promise<void> {
+        await this.readyPromise;
+    }
 
-            // Download to temp file
+    async uploadFromUrl(
+        chatId: number | string,
+        url: string,
+        caption: string,
+        progressCallback?: (progress: number) => void,
+    ): Promise<void> {
+        await this.readyPromise;
+
+        const filename = path.basename(new URL(url).pathname) || "file";
+        const tempPath = path.join("/tmp", `${Date.now()}_${filename}`);
+
+        try {
             const response = await axios({
                 url,
-                method: 'GET',
-                responseType: 'stream'
+                method: "GET",
+                responseType: "stream",
             });
 
             const writer = fs.createWriteStream(tempPath);
             response.data.pipe(writer);
 
-            await new Promise((resolve, reject) => {
-                writer.on('finish', () => resolve(true));
-                writer.on('error', reject);
+            await new Promise<void>((resolve, reject) => {
+                writer.on("finish", () => resolve());
+                writer.on("error", reject);
             });
 
             const stats = fs.statSync(tempPath);
-            const fileSize = stats.size;
+            const toUpload = new CustomFile(filename, stats.size, tempPath);
 
-            // Upload using MTProto
-            const toUpload = new CustomFile(filename, fileSize, tempPath);
-            
             await this.client.sendFile(chatId, {
                 file: toUpload,
-                caption: caption,
+                caption,
                 parseMode: "html",
                 workers: 4,
                 progressCallback: (progress) => {
                     if (progressCallback) progressCallback(progress);
-                }
+                },
             });
-
-            // Cleanup
-            fs.unlinkSync(tempPath);
-            return { success: true };
-        } catch (error) {
-            console.error("MTProto Upload Error:", error);
-            return { success: false, error };
+        } finally {
+            try {
+                fs.unlinkSync(tempPath);
+            } catch {
+                // best-effort cleanup
+            }
         }
     }
 }
