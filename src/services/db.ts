@@ -108,6 +108,16 @@ function getDb(): Database.Database {
             PRIMARY KEY (chat_id, day)
         );
     `);
+    // Admin-managed banlist. A row for chat_id means the chat is banned.
+    // Admins can /ban and /unban; banned chats are silently rejected by
+    // the message handlers.
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS banned_users (
+            chat_id INTEGER PRIMARY KEY,
+            reason  TEXT NOT NULL DEFAULT '',
+            at      INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
+    `);
     console.log(`SQLite preferences DB opened at ${dbPath}`);
     return db;
 }
@@ -284,6 +294,101 @@ export function incrementUploadsCount(chatId: number): void {
                  updated_at    = strftime('%s','now')`,
         )
         .run(chatId);
+}
+
+/** True when the given chat_id is on the admin-managed banlist. */
+export function isBanned(chatId: number): boolean {
+    const row = getDb()
+        .prepare("SELECT 1 FROM banned_users WHERE chat_id = ?")
+        .get(chatId);
+    return !!row;
+}
+
+/** Insert or remove a row on the banlist. */
+export function setBanned(
+    chatId: number,
+    banned: boolean,
+    reason = "",
+): void {
+    if (banned) {
+        getDb()
+            .prepare(
+                `INSERT INTO banned_users (chat_id, reason) VALUES (?, ?)
+                 ON CONFLICT(chat_id) DO UPDATE SET reason = excluded.reason`,
+            )
+            .run(chatId, reason);
+    } else {
+        getDb()
+            .prepare("DELETE FROM banned_users WHERE chat_id = ?")
+            .run(chatId);
+    }
+}
+
+/** All chat_ids currently marked as banned, plus their reason + ban-time. */
+export function listBannedUsers(): Array<{
+    chatId: number;
+    reason: string;
+    at: number;
+}> {
+    const rows = getDb()
+        .prepare("SELECT chat_id, reason, at FROM banned_users ORDER BY at DESC")
+        .all() as Array<{ chat_id: number; reason: string; at: number }>;
+    return rows.map((r) => ({ chatId: r.chat_id, reason: r.reason, at: r.at }));
+}
+
+/** All chat_ids that have ever touched the bot. Used by /broadcast. */
+export function getAllChatIds(): number[] {
+    const rows = getDb()
+        .prepare("SELECT chat_id FROM user_prefs")
+        .all() as Array<{ chat_id: number }>;
+    return rows.map((r) => r.chat_id);
+}
+
+/** Aggregate stats shown by /stats_all. */
+export interface AggregateStats {
+    totalUsers: number;
+    bannedUsers: number;
+    totalUploads: number;
+    aiCallsToday: number;
+    activeToday: number;
+    perLanguage: Array<{ language: string; count: number }>;
+}
+
+export function aggregateStats(): AggregateStats {
+    const database = getDb();
+    const totalUsers = (database
+        .prepare("SELECT COUNT(*) AS n FROM user_prefs")
+        .get() as { n: number }).n;
+    const bannedUsers = (database
+        .prepare("SELECT COUNT(*) AS n FROM banned_users")
+        .get() as { n: number }).n;
+    const totalUploads = (database
+        .prepare("SELECT COALESCE(SUM(uploads_count),0) AS n FROM user_prefs")
+        .get() as { n: number }).n;
+    const day = todayKey();
+    const aiCallsToday = (database
+        .prepare("SELECT COALESCE(SUM(calls),0) AS n FROM ai_usage WHERE day = ?")
+        .get(day) as { n: number }).n;
+    const activeToday = (database
+        .prepare("SELECT COUNT(*) AS n FROM ai_usage WHERE day = ?")
+        .get(day) as { n: number }).n;
+    const perLanguage = database
+        .prepare(
+            `SELECT language, COUNT(*) AS n FROM user_prefs
+             GROUP BY language ORDER BY n DESC`,
+        )
+        .all() as Array<{ language: string; n: number }>;
+    return {
+        totalUsers,
+        bannedUsers,
+        totalUploads,
+        aiCallsToday,
+        activeToday,
+        perLanguage: perLanguage.map((r) => ({
+            language: r.language,
+            count: r.n,
+        })),
+    };
 }
 
 export function closeDb(): void {
