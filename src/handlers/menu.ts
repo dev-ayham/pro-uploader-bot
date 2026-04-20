@@ -217,7 +217,6 @@ async function handleSettingsFromCallback(ctx: Context): Promise<void> {
     const text =
         `${s.settings_title}\n\n${s.settings_summary}\n` +
         `${prefs.uploadAsDocument ? s.enabled : s.disabled} ${s.upload_as_document}\n` +
-        `${prefs.spoiler ? s.enabled : s.disabled} ${s.spoiler}\n` +
         `${LANG_FLAG[prefs.language]} ${LANG_NATIVE[prefs.language]}\n` +
         `${s.screenshots_label(prefs.screenshotsCount)}\n` +
         `🖼️ ${thumbSet ? s.set_ : s.not_set}\n\n` +
@@ -351,16 +350,6 @@ export async function publishBotCommands(bot: Bot): Promise<void> {
                 tr: "Dosya olarak yukle (ac/kapa)",
                 fr: "Envoyer comme document (bascule)",
                 es: "Enviar como documento (alternar)",
-            },
-        },
-        {
-            command: "spoiler",
-            desc: {
-                ar: "تبديل السبويلر",
-                en: "Toggle spoiler mode",
-                tr: "Spoiler modunu ac/kapa",
-                fr: "Basculer mode spoiler",
-                es: "Alternar modo spoiler",
             },
         },
         {

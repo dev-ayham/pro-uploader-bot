@@ -35,15 +35,6 @@ export function registerQuickCommandHandlers(bot: Bot): void {
         await ctx.reply(t(prefs.language).cmd_doc_toggled(next));
     });
 
-    // /spoiler — toggle spoiler
-    bot.command("spoiler", async (ctx) => {
-        if (!ctx.chat) return;
-        const prefs = getUserPrefs(ctx.chat.id);
-        const next = !prefs.spoiler;
-        updateUserPrefs(ctx.chat.id, { spoiler: next });
-        await ctx.reply(t(prefs.language).cmd_spoiler_toggled(next));
-    });
-
     // /prefix [text|clear] — show, set, or clear the filename prefix.
     bot.command("prefix", async (ctx) => {
         if (!ctx.chat) return;
