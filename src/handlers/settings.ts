@@ -31,6 +31,11 @@ function buildKeyboard(prefs: UserPrefs): InlineKeyboard {
             "settings:toggle:language",
         )
         .row()
+        .text(
+            `🖼️ لقطات الفيديو: ${prefs.screenshotsCount || "معطّل"}`,
+            "settings:screenshots:cycle",
+        )
+        .row()
         .text("✏️ بادئة التسمية", "settings:rename:prefix:set")
         .text(
             prefs.renamePrefix ? "🗑️ مسح البادئة" : "—",
@@ -62,7 +67,8 @@ function renderSettingsText(prefs: UserPrefs): string {
         `• السبويلر: ${prefs.spoiler ? yes : no}\n` +
         `• اللغة: ${prefs.language === "ar" ? "العربية" : "English"}\n` +
         `• بادئة إعادة التسمية: ${prefix}\n` +
-        `• لاحقة إعادة التسمية: ${suffix}\n\n` +
+        `• لاحقة إعادة التسمية: ${suffix}\n` +
+        `• لقطات الفيديو: ${prefs.screenshotsCount > 0 ? prefs.screenshotsCount : no}\n\n` +
         `<i>اضغط على أي خيار لتغييره.</i>`
     );
 }
@@ -117,6 +123,21 @@ export function registerSettingsHandlers(bot: Bot): void {
                 await ctx.answerCallbackQuery();
                 return;
         }
+        await updateSettingsMessage(ctx, next);
+    });
+
+    bot.callbackQuery("settings:screenshots:cycle", async (ctx) => {
+        const chatId = ctx.chat?.id;
+        if (!chatId) {
+            await ctx.answerCallbackQuery();
+            return;
+        }
+        // Cycle: 0 -> 3 -> 5 -> 10 -> 0 ...
+        const cycle = [0, 3, 5, 10];
+        const current = getUserPrefs(chatId).screenshotsCount;
+        const idx = cycle.indexOf(current);
+        const nextCount = cycle[(idx + 1) % cycle.length];
+        const next = updateUserPrefs(chatId, { screenshotsCount: nextCount });
         await updateSettingsMessage(ctx, next);
     });
 

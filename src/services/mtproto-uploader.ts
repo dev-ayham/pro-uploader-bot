@@ -29,6 +29,13 @@ export interface UploadOptions {
     renamePrefix?: string;
     /** String to append to the visible filename before the extension. */
     renameSuffix?: string;
+    /**
+     * Hook called after a successful upload but *before* the downloaded
+     * file is deleted. Used by callers that want to do additional work on
+     * the local file (e.g. extract screenshots, compute a hash) without
+     * having to re-download. Throws are logged but don't fail the upload.
+     */
+    postUpload?: (filePath: string, filename: string) => Promise<void>;
 }
 
 /**
@@ -149,6 +156,19 @@ export class MTProtoUploader {
                         onProgress?.({ phase: "upload", fraction: progress });
                     },
                 });
+            }
+
+            if (options.postUpload) {
+                try {
+                    await options.postUpload(
+                        downloaded.filePath,
+                        downloaded.filename,
+                    );
+                } catch (err) {
+                    // Never let a post-upload side-effect (screenshots, etc.)
+                    // fail the primary operation the user asked for.
+                    console.error("postUpload hook threw:", err);
+                }
             }
         } finally {
             if (downloaded) {

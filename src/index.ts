@@ -2,7 +2,8 @@ import "dotenv/config";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { Bot } from "grammy";
+import { Bot, Context, InputFile } from "grammy";
+import type { InputMediaPhoto } from "grammy/types";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { MTProtoUploader, UploadProgress } from "./services/mtproto-uploader";
@@ -12,6 +13,7 @@ import {
     registerSettingsHandlers,
 } from "./handlers/settings";
 import { closeDb, getUserPrefs } from "./services/db";
+import { generateScreenshots } from "./services/screenshots";
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
 const apiId = parseInt(process.env.API_ID || "0", 10);
@@ -103,6 +105,75 @@ function rememberProcessed(chatId: number, messageId: number): boolean {
         if (firstKey !== undefined) processedMessages.delete(firstKey);
     }
     return true;
+}
+
+/**
+ * Generate up to `count` equidistant JPEG thumbnails for a just-uploaded
+ * video and send them to the same chat as an album. No-op for non-video
+ * MIME types. Errors are caught and reported in-chat so the successful
+ * main upload is not retroactively "failed" by a ffmpeg hiccup.
+ */
+const VIDEO_EXTS = new Set([
+    ".mp4", ".mkv", ".webm", ".mov", ".avi", ".flv", ".m4v", ".ts",
+    ".mpg", ".mpeg", ".3gp", ".wmv",
+]);
+
+async function sendScreenshots(
+    ctx: Context,
+    filePath: string,
+    filename: string,
+    count: number,
+): Promise<void> {
+    if (count < 1) return;
+    const ext = path.extname(filename).toLowerCase();
+    if (!VIDEO_EXTS.has(ext)) return;
+    if (!ctx.chat) return;
+    let shots: string[] = [];
+    try {
+        shots = await generateScreenshots(filePath, count, os.tmpdir());
+        if (shots.length === 0) {
+            await ctx.reply("⚠️ تعذّر استخراج لقطات من الفيديو.");
+            return;
+        }
+        // Telegram albums take 2-10 items. If count<2 we still want to show
+        // the single shot as a standalone photo.
+        if (shots.length === 1) {
+            await ctx.replyWithPhoto(new InputFile(shots[0]), {
+                caption: "🖼️ لقطة من الفيديو",
+            });
+        } else {
+            // sendMediaGroup caps at 10 items per call; our cycle is [0,3,5,10]
+            // so we never overflow.
+            const media: InputMediaPhoto[] = shots.slice(0, 10).map((p, i) => ({
+                type: "photo",
+                media: new InputFile(p),
+                caption: i === 0 ? `🖼️ ${shots.length} لقطات من الفيديو` : undefined,
+            }));
+            await ctx.replyWithMediaGroup(media);
+        }
+    } catch (err) {
+        console.error("sendScreenshots failed:", err);
+        const detail = err instanceof Error ? err.message : String(err);
+        await ctx.reply(
+            `⚠️ فشل استخراج اللقطات: <code>${escapeHtmlForMsg(detail)}</code>`,
+            { parse_mode: "HTML" },
+        );
+    } finally {
+        for (const p of shots) {
+            try {
+                fs.unlinkSync(p);
+            } catch {
+                // best-effort
+            }
+        }
+    }
+}
+
+function escapeHtmlForMsg(s: string): string {
+    return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
 }
 
 // --- Bot Handlers ---
@@ -225,6 +296,17 @@ bot.on("message:text", async (ctx) => {
                     spoiler: prefs.spoiler,
                     renamePrefix: prefs.renamePrefix,
                     renameSuffix: prefs.renameSuffix,
+                    postUpload:
+                        prefs.screenshotsCount > 0
+                            ? async (filePath, filename) => {
+                                  await sendScreenshots(
+                                      ctx,
+                                      filePath,
+                                      filename,
+                                      prefs.screenshotsCount,
+                                  );
+                              }
+                            : undefined,
                 },
             );
 
