@@ -8,6 +8,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { MTProtoUploader, UploadProgress } from "./services/mtproto-uploader";
 import {
+    FileTooLargeError,
     isDirectFileUrl,
     shouldUseYtDlp,
     YtDlpOptions,
@@ -94,6 +95,33 @@ function materializeCookiesFile(): string | undefined {
     }
 }
 
+/**
+ * Hard cap on the size of any single downloaded file, enforced both by
+ * yt-dlp's `--max-filesize` and by an HTTP Content-Length check for direct
+ * URLs. Default 2000 MB leaves headroom under Telegram's 2 GB MTProto limit
+ * so the upload can actually complete. Override via env when running on a
+ * beefier Railway plan.
+ */
+const MAX_FILE_SIZE_MB = (() => {
+    const raw = process.env.MAX_FILE_SIZE_MB;
+    const n = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 2000;
+})();
+
+/**
+ * Hard cap on the number of uploads we are willing to process concurrently
+ * across *all* chats. Each in-flight upload can spawn a `yt-dlp` child
+ * process (~150-300 MB RAM peak) plus an `ffmpeg` screenshot pass, so
+ * letting the counter grow unbounded is what turns a traffic spike into an
+ * OOM kill. Default 5 is comfortable on Railway Hobby (8 GB RAM ceiling);
+ * raise via env on Pro.
+ */
+const MAX_CONCURRENT_DOWNLOADS = (() => {
+    const raw = process.env.MAX_CONCURRENT_DOWNLOADS;
+    const n = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 5;
+})();
+
 const ytDlpOptions: YtDlpOptions = {
     cookiesFile: materializeCookiesFile(),
     userAgent:
@@ -102,6 +130,7 @@ const ytDlpOptions: YtDlpOptions = {
         // TikTok) silently serve different / better data to browser UAs.
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    maxFileSizeMb: MAX_FILE_SIZE_MB,
 };
 
 const bot = new Bot(botToken);
@@ -372,6 +401,15 @@ async function runUpload(
         return false;
     }
 
+    // Global concurrency cap: each in-flight upload can burn ~200-500 MB of
+    // RAM (yt-dlp + ffmpeg + MTProto buffers) so we refuse new work past
+    // MAX_CONCURRENT_DOWNLOADS rather than let a traffic spike OOM-kill the
+    // container. The user can just retry a minute later.
+    if (inFlightChats.size >= MAX_CONCURRENT_DOWNLOADS) {
+        await ctx.reply(s.queue_full(MAX_CONCURRENT_DOWNLOADS));
+        return false;
+    }
+
     inFlightChats.add(chatId);
     try {
         const initialText =
@@ -501,6 +539,21 @@ async function runUpload(
             return true;
         } catch (error) {
             console.error(`Upload (${mode}) failed:`, error);
+            // Surface the size-cap rejection as a friendly message instead of
+            // the raw "File exceeds 2000MB limit" Error.message — users should
+            // know to pick a lower quality rather than think the bot crashed.
+            if (
+                error instanceof FileTooLargeError ||
+                (error instanceof Error &&
+                    /File is larger than max-filesize/i.test(error.message))
+            ) {
+                const limit =
+                    error instanceof FileTooLargeError
+                        ? error.limitMb
+                        : MAX_FILE_SIZE_MB;
+                await editStatus(s.file_too_large(limit));
+                return false;
+            }
             const detail =
                 error instanceof Error
                     ? error.message.slice(0, 300)

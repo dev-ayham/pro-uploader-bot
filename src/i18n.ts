@@ -92,6 +92,8 @@ interface Strings {
     profile_link_not_supported: string;
     unsupported_url: string;
     already_in_flight: string;
+    queue_full: (max: number) => string;
+    file_too_large: (limitMb: number) => string;
     duplicate_ignored: string;
     screenshots_caption: (n: number) => string;
     screenshots_single: string;
@@ -259,6 +261,10 @@ const ar: Strings = {
         "⚠️ هذا الرابط غير مدعوم حالياً.\n\n" +
         "المنصّات المدعومة: Instagram / YouTube / TikTok / Twitter / Facebook / Reddit / Vimeo / SoundCloud — أو أي رابط مباشر لملف.",
     already_in_flight: "⏳ لديك رفع قيد التنفيذ. انتظر حتى ينتهي.",
+    queue_full: (max) =>
+        `⏳ السيرفر مشغول الآن (${max} عمليات متزامنة). حاول بعد دقيقة.`,
+    file_too_large: (mb) =>
+        `❌ الملف أكبر من الحد المسموح (${mb} ميجابايت). اختر جودة أقل أو رابطاً أصغر.`,
     duplicate_ignored: "ℹ️ تم تجاهل رابط مكرر.",
     screenshots_caption: (n) => `🖼️ ${n} لقطات من الفيديو`,
     screenshots_single: "🖼️ لقطة من الفيديو",
@@ -444,6 +450,10 @@ const en: Strings = {
         "⚠️ This URL isn't supported yet.\n\n" +
         "Supported platforms: Instagram / YouTube / TikTok / Twitter / Facebook / Reddit / Vimeo / SoundCloud — or any direct file URL.",
     already_in_flight: "⏳ You already have an upload in progress. Please wait.",
+    queue_full: (max) =>
+        `⏳ The server is busy right now (${max} concurrent uploads). Try again in a minute.`,
+    file_too_large: (mb) =>
+        `❌ File is larger than the allowed limit (${mb} MB). Pick a lower quality or a smaller URL.`,
     duplicate_ignored: "ℹ️ Duplicate link ignored.",
     screenshots_caption: (n) => `🖼️ ${n} screenshots from the video`,
     screenshots_single: "🖼️ Screenshot from the video",
@@ -630,6 +640,10 @@ const tr: Strings = {
         "⚠️ Bu URL şu anda desteklenmiyor.\n\n" +
         "Desteklenen platformlar: Instagram / YouTube / TikTok / Twitter / Facebook / Reddit / Vimeo / SoundCloud — veya herhangi bir doğrudan dosya bağlantısı.",
     already_in_flight: "⏳ Zaten devam eden bir yuklemeniz var. Lutfen bekleyin.",
+    queue_full: (max) =>
+        `⏳ Sunucu su an mesgul (${max} es zamanli yukleme). Bir dakika sonra tekrar deneyin.`,
+    file_too_large: (mb) =>
+        `❌ Dosya izin verilen sinirdan buyuk (${mb} MB). Daha dusuk kalite veya daha kucuk bir URL secin.`,
     duplicate_ignored: "ℹ️ Tekrarlanan link yok sayildi.",
     screenshots_caption: (n) => `🖼️ Videodan ${n} ekran goruntusu`,
     screenshots_single: "🖼️ Videodan ekran goruntusu",
@@ -815,6 +829,10 @@ const fr: Strings = {
         "⚠️ Cette URL n'est pas prise en charge pour le moment.\n\n" +
         "Plateformes prises en charge : Instagram / YouTube / TikTok / Twitter / Facebook / Reddit / Vimeo / SoundCloud — ou tout lien direct vers un fichier.",
     already_in_flight: "⏳ Un upload est deja en cours. Veuillez patienter.",
+    queue_full: (max) =>
+        `⏳ Le serveur est occupe (${max} uploads simultanes). Reessayez dans une minute.`,
+    file_too_large: (mb) =>
+        `❌ Fichier plus grand que la limite (${mb} Mo). Choisissez une qualite inferieure ou une URL plus petite.`,
     duplicate_ignored: "ℹ️ Lien en double ignore.",
     screenshots_caption: (n) => `🖼️ ${n} captures de la video`,
     screenshots_single: "🖼️ Capture de la video",
@@ -1000,6 +1018,10 @@ const es: Strings = {
         "⚠️ Esta URL aún no es compatible.\n\n" +
         "Plataformas compatibles: Instagram / YouTube / TikTok / Twitter / Facebook / Reddit / Vimeo / SoundCloud — o cualquier enlace directo a un archivo.",
     already_in_flight: "⏳ Ya tienes una carga en curso. Espera.",
+    queue_full: (max) =>
+        `⏳ El servidor esta ocupado (${max} cargas simultaneas). Intenta en un minuto.`,
+    file_too_large: (mb) =>
+        `❌ El archivo supera el limite permitido (${mb} MB). Elige una calidad menor o una URL mas pequena.`,
     duplicate_ignored: "ℹ️ Enlace duplicado ignorado.",
     screenshots_caption: (n) => `🖼️ ${n} capturas del video`,
     screenshots_single: "🖼️ Captura del video",
