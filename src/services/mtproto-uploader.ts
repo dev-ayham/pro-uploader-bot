@@ -154,30 +154,6 @@ const EXTERNAL_URL_TIMEOUT_MS = (() => {
     return Number.isFinite(n) && n > 0 ? n : 20_000;
 })();
 
-/**
- * Race `promise` against a timer and reject with `Error(label)` if the
- * timer fires first. The underlying work keeps running (GramJS does not
- * expose cancellation on `sendFile`) — any eventual rejection is caught
- * by the attached handler to avoid unhandled-rejection noise.
- */
-function raceWithTimeout<T>(
-    promise: Promise<T>,
-    ms: number,
-    label: string,
-): Promise<T> {
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(label)), ms);
-    });
-    // Swallow late rejections from the abandoned work so Node doesn't
-    // crash with UnhandledPromiseRejection once we've already fallen
-    // back to the slow path.
-    promise.catch(() => {});
-    return Promise.race([promise, timeout]).finally(() => {
-        if (timer) clearTimeout(timer);
-    });
-}
-
 export interface UploadProgress {
     phase: "download" | "upload";
     fraction: number;
@@ -590,17 +566,58 @@ export class MTProtoUploader {
         // after `EXTERNAL_URL_TIMEOUT_MS` (default 20 s) and fall through
         // to the local download+upload path, so slow CDNs degrade
         // gracefully instead of looking like a dead bot.
+        //
+        // GramJS has no cancellation, so the abandoned `sendFile` keeps
+        // running in the background. If Telegram eventually accepts the
+        // URL *after* we've already started the fallback download+upload,
+        // the user would receive the same file twice. To prevent that we
+        // attach a late-success handler that deletes the duplicate
+        // message from the chat once it arrives.
+        let timedOut = false;
+        const sendPromise = this.client.sendFile(chatId, {
+            file: url,
+            caption,
+            parseMode: "html",
+            forceDocument: options.asDocument === true,
+        });
+        sendPromise.then(
+            (msg) => {
+                if (!timedOut) return;
+                const id = (msg as { id?: unknown } | null | undefined)?.id;
+                if (typeof id !== "number" && typeof id !== "bigint") return;
+                this.client
+                    .deleteMessages(chatId, [Number(id)], { revoke: true })
+                    .catch((err: unknown) => {
+                        console.warn(
+                            `[external-url] failed to delete late duplicate: ${
+                                err instanceof Error
+                                    ? err.message
+                                    : String(err)
+                            }`,
+                        );
+                    });
+            },
+            // Swallow late rejections so Node doesn't raise
+            // UnhandledPromiseRejection after we've already fallen back.
+            () => {},
+        );
         try {
-            await raceWithTimeout(
-                this.client.sendFile(chatId, {
-                    file: url,
-                    caption,
-                    parseMode: "html",
-                    forceDocument: options.asDocument === true,
-                }),
-                EXTERNAL_URL_TIMEOUT_MS,
-                "external-url timeout",
-            );
+            await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    timedOut = true;
+                    reject(new Error("external-url timeout"));
+                }, EXTERNAL_URL_TIMEOUT_MS);
+                sendPromise.then(
+                    () => {
+                        clearTimeout(timer);
+                        resolve();
+                    },
+                    (err) => {
+                        clearTimeout(timer);
+                        reject(err);
+                    },
+                );
+            });
             return true;
         } catch (err) {
             // Log enough detail that we can tell whether Telegram is
