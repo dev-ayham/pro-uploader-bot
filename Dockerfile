@@ -35,4 +35,16 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 ENV NODE_ENV=production
+
+# Runtime env vars (set in Railway → Variables):
+#   TELEGRAM_BOT_TOKEN, API_ID, API_HASH  (required)
+#   YT_DLP_COOKIES                        (optional: Netscape cookies.txt for
+#                                          Instagram/YouTube auth-walled URLs)
+#   OPENAI_API_KEY                        (optional: enables the AI intent
+#                                          parser fallback — "give me the
+#                                          audio" etc. Falls back silently
+#                                          to the regex classifier if unset.)
+#   OPENAI_MODEL                          (optional, default "gpt-4.1-nano")
+#   AI_DAILY_LIMIT_PER_USER               (optional, default 10 OpenAI calls
+#                                          per chat per UTC day)
 CMD ["node", "dist/index.js"]

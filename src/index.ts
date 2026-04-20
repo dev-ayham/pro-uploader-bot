@@ -16,7 +16,21 @@ import {
     publishBotCommands,
     registerMenuHandlers,
 } from "./handlers/menu";
-import { closeDb, getUserPrefs, incrementUploadsCount } from "./services/db";
+import {
+    closeDb,
+    getAiCallsToday,
+    getUserPrefs,
+    incrementAiCallsToday,
+    incrementUploadsCount,
+    setLastUrl,
+} from "./services/db";
+import {
+    getCachedIntent,
+    parseIntentByKeywords,
+    parseIntentWithOpenAI,
+    setCachedIntent,
+    type IntentAction,
+} from "./services/ai-intent";
 import { registerQuickCommandHandlers } from "./handlers/commands";
 import { t } from "./i18n";
 import { generateScreenshots } from "./services/screenshots";
@@ -239,64 +253,58 @@ bot.on("message:photo", async (ctx) => {
     }
 });
 
-bot.on("message:text", async (ctx) => {
-    // If the user is mid-flow inside a /settings prompt (typing a rename
-    // prefix / suffix), consume this message as the answer and don't try to
-    // parse it as a URL.
-    if (await handlePendingInputIfAny(ctx)) {
-        return;
-    }
+/**
+ * Upload modes driven either by the user's stored preferences (default) or
+ * by an AI-parsed follow-up intent ("audio" / "document" / "video").
+ */
+type UploadMode = "default" | "audio" | "document" | "video";
 
-    const text = ctx.message.text;
-    const urlPattern = /https?:\/\/[^\s]+/;
-    const match = text.match(urlPattern);
+const AI_DAILY_LIMIT = parseInt(
+    // Default lowered from 20 to 10 for a more conservative initial spend
+    // budget. Users who want a higher ceiling set AI_DAILY_LIMIT_PER_USER
+    // explicitly on Railway.
+    process.env.AI_DAILY_LIMIT_PER_USER || "10",
+    10,
+);
+// gpt-4.1-nano is OpenAI's cheapest text model ($0.10 / 1M input tokens,
+// $0.40 / 1M output), ~33% cheaper than gpt-4o-mini for our classification
+// workload. Override via OPENAI_MODEL if a different model is desired.
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-nano";
 
-    const s = t(langOf(ctx.chat.id));
-    if (!match) {
-        return ctx.reply(s.invalid_url);
-    }
+/**
+ * Shared upload pipeline used by both the URL-in-message path and the AI
+ * intent-dispatch path. Owns the "processing..." status message, the
+ * progress callback, the in-flight guard and the post-upload bookkeeping
+ * (setLastUrl, incrementUploadsCount). Returns true iff the upload
+ * finished without throwing, so callers can chain follow-up actions.
+ */
+async function runUpload(
+    ctx: Context,
+    url: string,
+    mode: UploadMode,
+): Promise<boolean> {
+    if (!ctx.chat) return false;
+    const chatId = ctx.chat.id;
+    const s = t(langOf(chatId));
 
-    // De-dup: Telegram Bot API occasionally re-delivers the same update after
-    // a restart. Skip any message id we already handled.
-    if (!rememberProcessed(ctx.chat.id, ctx.message.message_id)) {
-        console.warn(
-            `Skipping duplicate delivery of message ${ctx.message.message_id} in chat ${ctx.chat.id}`,
-        );
-        return;
-    }
-
-    // If the same user already has an upload running, refuse rather than
-    // running two MTProto uploads in parallel for the same session.
-    if (inFlightChats.has(ctx.chat.id)) {
+    if (inFlightChats.has(chatId)) {
         await ctx.reply(s.already_in_flight);
-        return;
+        return false;
     }
 
-    const url = match[0];
-
-    // If the user paste-spams the same URL twice within 30s we treat the
-    // second one as an accidental double-send.
-    const prev = recentUrls.get(ctx.chat.id);
-    if (prev && prev.url === url && Date.now() - prev.at < 30_000) {
-        await ctx.reply(s.duplicate_ignored);
-        return;
-    }
-    recentUrls.set(ctx.chat.id, { url, at: Date.now() });
-
-    // Claim the in-flight slot before any awaits that could reject and
-    // release it in a finally that covers *every* code path below, including
-    // the initial ctx.reply. If we only wrapped the upload part, a failed
-    // "processing..." reply (network blip, user blocked bot, flood wait)
-    // would leak the chat id into inFlightChats forever and every future
-    // upload from that user would hit the "already in flight" guard.
-    inFlightChats.add(ctx.chat.id);
+    inFlightChats.add(chatId);
     try {
-        const initialText = shouldUseYtDlp(url)
-            ? s.extracting
-            : s.processing;
+        const initialText =
+            mode === "audio"
+                ? s.ai_audio_extracting
+                : mode === "document"
+                ? s.ai_reupload_document
+                : mode === "video"
+                ? s.ai_reupload_video
+                : shouldUseYtDlp(url)
+                ? s.extracting
+                : s.processing;
 
-        // If even the first status reply fails we still want the bot to
-        // recover gracefully, so catch the inner failure and just log.
         let statusMsg: { message_id: number } | undefined;
         try {
             statusMsg = await ctx.reply(initialText);
@@ -308,7 +316,7 @@ bot.on("message:text", async (ctx) => {
             if (!statusMsg) return;
             try {
                 await bot.api.editMessageText(
-                    ctx.chat.id,
+                    chatId,
                     statusMsg.message_id,
                     text,
                     parseMode ? { parse_mode: parseMode } : undefined,
@@ -322,81 +330,232 @@ bot.on("message:text", async (ctx) => {
             phase: "",
             bucket: -1,
         };
-        // Read the user's stored toggles so /settings actually does something.
-        const prefs = getUserPrefs(ctx.chat.id);
+
+        // Honour the user's saved toggles. For AI intents we *override*
+        // the document/video flag for this single upload without
+        // persisting the change — it would be surprising if "give me as
+        // document" permanently flipped the user's default.
+        const prefs = getUserPrefs(chatId);
+        const asDocument =
+            mode === "document"
+                ? true
+                : mode === "video"
+                ? false
+                : prefs.uploadAsDocument;
+
+        const onProgress = async (progress: UploadProgress) => {
+            const bucket = Math.min(4, Math.floor(progress.fraction * 5));
+            if (
+                progress.phase === lastBucket.phase &&
+                bucket === lastBucket.bucket
+            ) {
+                return;
+            }
+            lastBucket = { phase: progress.phase, bucket };
+            const text =
+                mode === "audio"
+                    ? progress.phase === "download"
+                        ? s.ai_audio_extracting
+                        : s.ai_audio_uploading(progress.fraction)
+                    : progress.phase === "download"
+                    ? s.downloading(progress.fraction)
+                    : s.uploading(progress.fraction);
+            await editStatus(text);
+        };
 
         try {
-            await uploader.uploadFromUrl(
-                ctx.chat.id,
-                url,
-                `<b>📄 الملف المرفوع:</b>\n<code>${url}</code>`,
-                async (progress: UploadProgress) => {
-                    // Report at each 20% bucket per phase (0, 20, 40, 60, 80).
-                    const bucket = Math.min(
-                        4,
-                        Math.floor(progress.fraction * 5),
-                    );
-                    if (
-                        progress.phase === lastBucket.phase &&
-                        bucket === lastBucket.bucket
-                    ) {
-                        return;
-                    }
-                    lastBucket = { phase: progress.phase, bucket };
-                    const text =
-                        progress.phase === "download"
-                            ? s.downloading(progress.fraction)
-                            : s.uploading(progress.fraction);
-                    await editStatus(text);
-                },
-                {
-                    asDocument: prefs.uploadAsDocument,
-                    renamePrefix: prefs.renamePrefix,
-                    renameSuffix: prefs.renameSuffix,
-                    thumbnailPath: hasThumbnail(ctx.chat.id)
-                        ? thumbnailPath(ctx.chat.id)
-                        : undefined,
-                    postUpload:
-                        prefs.screenshotsCount > 0
-                            ? async (filePath, filename) => {
-                                  await sendScreenshots(
-                                      ctx,
-                                      filePath,
-                                      filename,
-                                      prefs.screenshotsCount,
-                                  );
-                              }
+            if (mode === "audio") {
+                await uploader.uploadAudioFromUrl(
+                    chatId,
+                    url,
+                    `<b>🎵</b>\n<code>${url}</code>`,
+                    onProgress,
+                    {
+                        renamePrefix: prefs.renamePrefix,
+                        renameSuffix: prefs.renameSuffix,
+                    },
+                );
+                await editStatus(s.ai_audio_success);
+            } else {
+                await uploader.uploadFromUrl(
+                    chatId,
+                    url,
+                    `<b>📄</b>\n<code>${url}</code>`,
+                    onProgress,
+                    {
+                        asDocument,
+                        renamePrefix: prefs.renamePrefix,
+                        renameSuffix: prefs.renameSuffix,
+                        thumbnailPath: hasThumbnail(chatId)
+                            ? thumbnailPath(chatId)
                             : undefined,
-                },
-            );
+                        postUpload:
+                            prefs.screenshotsCount > 0
+                                ? async (filePath, filename) => {
+                                      await sendScreenshots(
+                                          ctx,
+                                          filePath,
+                                          filename,
+                                          prefs.screenshotsCount,
+                                      );
+                                  }
+                                : undefined,
+                    },
+                );
+                await editStatus(s.success);
+            }
 
-            await editStatus(s.success);
-            // Bump the lifetime uploads counter so /stats reflects the user's
-            // activity. Purely cosmetic; a failed counter bump must not
-            // impact the upload that just succeeded.
+            // Remember this URL so an AI follow-up ("give me the audio")
+            // knows what to operate on without a re-paste.
             try {
-                incrementUploadsCount(ctx.chat.id);
+                setLastUrl(chatId, url);
+            } catch (err) {
+                console.error("setLastUrl failed:", err);
+            }
+            try {
+                incrementUploadsCount(chatId);
             } catch (err) {
                 console.error("incrementUploadsCount failed:", err);
             }
+            return true;
         } catch (error) {
-            console.error("Upload failed:", error);
+            console.error(`Upload (${mode}) failed:`, error);
             const detail =
                 error instanceof Error
                     ? error.message.slice(0, 300)
                     : String(error);
-            const escaped = detail
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;");
-            await editStatus(
-                `${s.error}\n\n<code>${escaped}</code>`,
-                "HTML",
-            );
+            const escaped = escapeHtmlForMsg(detail);
+            const template =
+                mode === "audio" ? s.ai_audio_error(escaped) : `${s.error}\n\n<code>${escaped}</code>`;
+            await editStatus(template, "HTML");
+            return false;
         }
     } finally {
-        inFlightChats.delete(ctx.chat.id);
+        inFlightChats.delete(chatId);
     }
+}
+
+/**
+ * Resolve a no-URL follow-up message into a concrete action. Tries the
+ * free regex classifier first, then falls back to OpenAI when (a) it's
+ * configured via `OPENAI_API_KEY`, (b) the user hasn't exhausted their
+ * per-day AI budget, and (c) the regex pass was inconclusive.
+ *
+ * Returns `null` when no classification can be made so the caller can
+ * surface `ai_intent_unknown` to the user.
+ */
+async function classifyFollowUp(
+    chatId: number,
+    text: string,
+): Promise<{ action: IntentAction; rateLimited?: boolean } | null> {
+    const byKeyword = parseIntentByKeywords(text);
+    if (byKeyword !== "unknown") {
+        return { action: byKeyword };
+    }
+
+    // Before spending an OpenAI call, check the in-process classification
+    // cache. When a user asks the same fuzzy phrase twice within 10 minutes
+    // we don't need to pay again.
+    const cached = getCachedIntent(chatId, text);
+    if (cached) return { action: cached };
+
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return null;
+
+    // Count the attempt *before* making the network call so a burst of
+    // nonsense messages quickly trips the quota regardless of what OpenAI
+    // answers.
+    let used: number;
+    try {
+        used = incrementAiCallsToday(chatId);
+    } catch (err) {
+        console.error("incrementAiCallsToday failed:", err);
+        return null;
+    }
+    if (used > AI_DAILY_LIMIT) {
+        return { action: "unknown", rateLimited: true };
+    }
+
+    const intent = await parseIntentWithOpenAI(text, {
+        apiKey,
+        model: OPENAI_MODEL,
+    });
+    if (intent.action === "unknown") return null;
+    setCachedIntent(chatId, text, intent.action);
+    return { action: intent.action };
+}
+
+bot.on("message:text", async (ctx) => {
+    // If the user is mid-flow inside a /settings prompt (typing a rename
+    // prefix / suffix), consume this message as the answer and don't try to
+    // parse it as a URL.
+    if (await handlePendingInputIfAny(ctx)) {
+        return;
+    }
+
+    const text = ctx.message.text;
+    const urlPattern = /https?:\/\/[^\s]+/;
+    const match = text.match(urlPattern);
+    const chatId = ctx.chat.id;
+    const s = t(langOf(chatId));
+
+    // --- No URL branch: treat the message as an AI follow-up instruction
+    //     against the last remembered URL for this chat.
+    if (!match) {
+        if (!rememberProcessed(chatId, ctx.message.message_id)) return;
+
+        const prefs = getUserPrefs(chatId);
+        if (!prefs.lastUrl) {
+            await ctx.reply(s.invalid_url);
+            return;
+        }
+
+        const resolved = await classifyFollowUp(chatId, text);
+        if (!resolved) {
+            await ctx.reply(s.ai_intent_unknown);
+            return;
+        }
+        if (resolved.rateLimited) {
+            await ctx.reply(s.ai_daily_limit(AI_DAILY_LIMIT));
+            return;
+        }
+
+        switch (resolved.action) {
+            case "audio":
+                await runUpload(ctx, prefs.lastUrl, "audio");
+                return;
+            case "document":
+                await runUpload(ctx, prefs.lastUrl, "document");
+                return;
+            case "video":
+                await runUpload(ctx, prefs.lastUrl, "video");
+                return;
+            case "retry":
+                await ctx.reply(s.ai_retrying);
+                await runUpload(ctx, prefs.lastUrl, "default");
+                return;
+            default:
+                await ctx.reply(s.ai_intent_unknown);
+                return;
+        }
+    }
+
+    // --- URL branch: regular upload.
+    if (!rememberProcessed(chatId, ctx.message.message_id)) {
+        console.warn(
+            `Skipping duplicate delivery of message ${ctx.message.message_id} in chat ${chatId}`,
+        );
+        return;
+    }
+
+    const url = match[0];
+    const prev = recentUrls.get(chatId);
+    if (prev && prev.url === url && Date.now() - prev.at < 30_000) {
+        await ctx.reply(s.duplicate_ignored);
+        return;
+    }
+    recentUrls.set(chatId, { url, at: Date.now() });
+    await runUpload(ctx, url, "default");
 });
 
 // Global handler-level error safety net. A throw inside a handler should

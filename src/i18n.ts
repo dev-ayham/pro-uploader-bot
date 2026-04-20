@@ -131,6 +131,18 @@ interface Strings {
     id_text: (chatId: number, userId: number) => string;
     pong: (uptimeSec: number) => string;
     stats_never: string;
+
+    // AI intent follow-ups
+    ai_no_last_url: string;
+    ai_daily_limit: (limit: number) => string;
+    ai_intent_unknown: string;
+    ai_audio_extracting: string;
+    ai_audio_uploading: (p: number) => string;
+    ai_audio_success: string;
+    ai_audio_error: (detail: string) => string;
+    ai_retrying: string;
+    ai_reupload_document: string;
+    ai_reupload_video: string;
 }
 
 const ar: Strings = {
@@ -286,6 +298,19 @@ const ar: Strings = {
         `• User ID: <code>${userId}</code>`,
     pong: (u) => `🏓 pong — يعمل منذ ${formatUptime(u, "ar")}`,
     stats_never: "—",
+
+    ai_no_last_url: "ℹ️ لم أستلم رابطاً بعد. أرسل رابطاً أولاً، ثم اكتبلي ماذا تريد منه.",
+    ai_daily_limit: (limit) =>
+        `⏳ وصلت إلى الحد اليومي من طلبات الذكاء الاصطناعي (${limit}). جرّب غداً أو أرسل رابطاً جديداً.`,
+    ai_intent_unknown:
+        "🤖 لم أفهم طلبك. جرّب أن تكتب: «بدي ياه صوت» أو «كملف» أو «كفيديو» أو «أعد المحاولة».",
+    ai_audio_extracting: "🎵 جاري استخراج الصوت...",
+    ai_audio_uploading: (p) => `📤 رفع الصوت: ${Math.round(p * 100)}%`,
+    ai_audio_success: "✅ تم رفع الصوت بنجاح!",
+    ai_audio_error: (d) => `❌ فشل استخراج الصوت: <code>${d}</code>`,
+    ai_retrying: "🔄 إعادة المحاولة على الرابط السابق...",
+    ai_reupload_document: "📄 إعادة الرفع كملف...",
+    ai_reupload_video: "🎬 إعادة الرفع كفيديو...",
 };
 
 const en: Strings = {
@@ -441,6 +466,20 @@ Clear: <code>/suffix clear</code>`,
         `• User ID: <code>${userId}</code>`,
     pong: (u) => `🏓 pong — up for ${formatUptime(u, "en")}`,
     stats_never: "—",
+
+    ai_no_last_url:
+        "ℹ️ I haven't received a URL yet. Send a link first, then tell me what you want done with it.",
+    ai_daily_limit: (limit) =>
+        `⏳ You've hit your daily AI limit (${limit}). Try again tomorrow or send a fresh URL.`,
+    ai_intent_unknown:
+        "🤖 I didn't understand. Try: 'audio' / 'as document' / 'as video' / 'retry'.",
+    ai_audio_extracting: "🎵 Extracting audio...",
+    ai_audio_uploading: (p) => `📤 Uploading audio: ${Math.round(p * 100)}%`,
+    ai_audio_success: "✅ Audio uploaded!",
+    ai_audio_error: (d) => `❌ Audio extraction failed: <code>${d}</code>`,
+    ai_retrying: "🔄 Retrying the previous URL...",
+    ai_reupload_document: "📄 Re-uploading as document...",
+    ai_reupload_video: "🎬 Re-uploading as video...",
 };
 
 const tr: Strings = {
@@ -596,6 +635,20 @@ Temizle: <code>/suffix clear</code>`,
         `• User ID: <code>${userId}</code>`,
     pong: (u) => `🏓 pong — çalışma süresi: ${formatUptime(u, "tr")}`,
     stats_never: "—",
+
+    ai_no_last_url:
+        "ℹ️ Henüz bir bağlantı almadım. Önce bir bağlantı gönderin, sonra ne yapılmasını istediğinizi yazın.",
+    ai_daily_limit: (limit) =>
+        `⏳ Günlük AI limitinize ulaştınız (${limit}). Yarın tekrar deneyin veya yeni bir URL gönderin.`,
+    ai_intent_unknown:
+        "🤖 Anlamadım. Şunları deneyin: 'ses' / 'belge olarak' / 'video olarak' / 'tekrar dene'.",
+    ai_audio_extracting: "🎵 Ses çıkarılıyor...",
+    ai_audio_uploading: (p) => `📤 Ses yükleniyor: ${Math.round(p * 100)}%`,
+    ai_audio_success: "✅ Ses yüklendi!",
+    ai_audio_error: (d) => `❌ Ses çıkarılamadı: <code>${d}</code>`,
+    ai_retrying: "🔄 Önceki URL yeniden deneniyor...",
+    ai_reupload_document: "📄 Belge olarak yeniden yükleniyor...",
+    ai_reupload_video: "🎬 Video olarak yeniden yükleniyor...",
 };
 
 const fr: Strings = {
@@ -750,6 +803,20 @@ Effacer: <code>/suffix clear</code>`,
         `• User ID: <code>${userId}</code>`,
     pong: (u) => `🏓 pong — actif depuis ${formatUptime(u, "fr")}`,
     stats_never: "—",
+
+    ai_no_last_url:
+        "ℹ️ Je n'ai pas encore reçu de lien. Envoyez d'abord une URL, puis dites-moi ce que vous voulez en faire.",
+    ai_daily_limit: (limit) =>
+        `⏳ Vous avez atteint la limite quotidienne d'IA (${limit}). Réessayez demain ou envoyez une nouvelle URL.`,
+    ai_intent_unknown:
+        "🤖 Je n'ai pas compris. Essayez : 'audio' / 'en document' / 'en vidéo' / 'réessayer'.",
+    ai_audio_extracting: "🎵 Extraction de l'audio...",
+    ai_audio_uploading: (p) => `📤 Envoi audio : ${Math.round(p * 100)}%`,
+    ai_audio_success: "✅ Audio envoyé !",
+    ai_audio_error: (d) => `❌ Échec de l'extraction audio : <code>${d}</code>`,
+    ai_retrying: "🔄 Nouvelle tentative sur l'URL précédente...",
+    ai_reupload_document: "📄 Renvoi en document...",
+    ai_reupload_video: "🎬 Renvoi en vidéo...",
 };
 
 const es: Strings = {
@@ -904,6 +971,20 @@ Borrar: <code>/suffix clear</code>`,
         `• User ID: <code>${userId}</code>`,
     pong: (u) => `🏓 pong — activo desde hace ${formatUptime(u, "es")}`,
     stats_never: "—",
+
+    ai_no_last_url:
+        "ℹ️ Aún no he recibido una URL. Envía un enlace primero y luego dime qué quieres hacer con él.",
+    ai_daily_limit: (limit) =>
+        `⏳ Has alcanzado el límite diario de IA (${limit}). Inténtalo mañana o envía una URL nueva.`,
+    ai_intent_unknown:
+        "🤖 No te entendí. Prueba: 'audio' / 'como documento' / 'como video' / 'reintentar'.",
+    ai_audio_extracting: "🎵 Extrayendo audio...",
+    ai_audio_uploading: (p) => `📤 Subiendo audio: ${Math.round(p * 100)}%`,
+    ai_audio_success: "✅ ¡Audio subido!",
+    ai_audio_error: (d) => `❌ Fallo al extraer audio: <code>${d}</code>`,
+    ai_retrying: "🔄 Reintentando la URL anterior...",
+    ai_reupload_document: "📄 Reenviando como documento...",
+    ai_reupload_video: "🎬 Reenviando como video...",
 };
 
 /**

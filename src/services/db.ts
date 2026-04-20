@@ -25,6 +25,10 @@ export interface UserPrefs {
     uploadsCount: number;
     /** First-seen unix seconds; null until first write. */
     createdAt: number | null;
+    /** Last URL this chat successfully uploaded; used as the implicit target
+     *  for AI intents like "give me the audio" when the user follows up
+     *  without re-pasting the link. Empty string when none is known. */
+    lastUrl: string;
 }
 
 const DEFAULTS: Omit<UserPrefs, "chatId"> = {
@@ -36,6 +40,7 @@ const DEFAULTS: Omit<UserPrefs, "chatId"> = {
     screenshotsCount: 0,
     uploadsCount: 0,
     createdAt: null,
+    lastUrl: "",
 };
 
 /** Mutable fields that the public API is allowed to patch. uploadsCount and
@@ -94,6 +99,15 @@ function getDb(): Database.Database {
     // that pre-dated this column.
     addColumnIfMissing(db, "user_prefs", "screenshots_count", "INTEGER NOT NULL DEFAULT 0");
     addColumnIfMissing(db, "user_prefs", "uploads_count", "INTEGER NOT NULL DEFAULT 0");
+    addColumnIfMissing(db, "user_prefs", "last_url", "TEXT NOT NULL DEFAULT ''");
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS ai_usage (
+            chat_id INTEGER NOT NULL,
+            day TEXT NOT NULL,
+            calls INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (chat_id, day)
+        );
+    `);
     console.log(`SQLite preferences DB opened at ${dbPath}`);
     return db;
 }
@@ -121,6 +135,7 @@ interface Row {
     screenshots_count: number;
     uploads_count: number;
     created_at: number | null;
+    last_url: string | null;
 }
 
 function rowToPrefs(row: Row): UserPrefs {
@@ -138,6 +153,7 @@ function rowToPrefs(row: Row): UserPrefs {
         screenshotsCount: row.screenshots_count ?? 0,
         uploadsCount: row.uploads_count ?? 0,
         createdAt: row.created_at ?? null,
+        lastUrl: row.last_url ?? "",
     };
 }
 
@@ -163,9 +179,9 @@ export function updateUserPrefs(
         .prepare(
             `
             INSERT INTO user_prefs
-                (chat_id, upload_as_document, spoiler, language, rename_prefix, rename_suffix, screenshots_count, updated_at)
+                (chat_id, upload_as_document, spoiler, language, rename_prefix, rename_suffix, screenshots_count, last_url, updated_at)
             VALUES
-                (@chatId, @uploadAsDocument, @spoiler, @language, @renamePrefix, @renameSuffix, @screenshotsCount, strftime('%s','now'))
+                (@chatId, @uploadAsDocument, @spoiler, @language, @renamePrefix, @renameSuffix, @screenshotsCount, @lastUrl, strftime('%s','now'))
             ON CONFLICT(chat_id) DO UPDATE SET
                 upload_as_document = excluded.upload_as_document,
                 spoiler            = excluded.spoiler,
@@ -173,6 +189,7 @@ export function updateUserPrefs(
                 rename_prefix      = excluded.rename_prefix,
                 rename_suffix      = excluded.rename_suffix,
                 screenshots_count  = excluded.screenshots_count,
+                last_url           = excluded.last_url,
                 updated_at         = strftime('%s','now')
             `,
         )
@@ -184,8 +201,60 @@ export function updateUserPrefs(
             renamePrefix: next.renamePrefix,
             renameSuffix: next.renameSuffix,
             screenshotsCount: next.screenshotsCount,
+            lastUrl: next.lastUrl,
         });
     return next;
+}
+
+/** Remember the most recent URL this chat uploaded so AI follow-ups can
+ *  reference it ("give me the audio", "as document"). Kept on a separate
+ *  entry point so code paths that just want to remember a URL don't have
+ *  to go through the full updateUserPrefs patch. */
+export function setLastUrl(chatId: number, url: string): void {
+    getDb()
+        .prepare(
+            `INSERT INTO user_prefs (chat_id, last_url, updated_at)
+             VALUES (?, ?, strftime('%s','now'))
+             ON CONFLICT(chat_id) DO UPDATE SET
+                 last_url   = excluded.last_url,
+                 updated_at = strftime('%s','now')`,
+        )
+        .run(chatId, url);
+}
+
+/** Return today's date stamped as YYYY-MM-DD in UTC. Used as the partition
+ *  key for the per-chat AI rate limiter. */
+function todayKey(): string {
+    return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Atomic +1 on the per-chat AI call counter for today. Returns the new
+ * value so the caller can decide whether the user has exceeded
+ * `AI_DAILY_LIMIT_PER_USER`. We count the attempt before the OpenAI call
+ * so that a spam of requests quickly trips the limit even if each call
+ * eventually errors out.
+ */
+export function incrementAiCallsToday(chatId: number): number {
+    const day = todayKey();
+    const database = getDb();
+    database
+        .prepare(
+            `INSERT INTO ai_usage (chat_id, day, calls) VALUES (?, ?, 1)
+             ON CONFLICT(chat_id, day) DO UPDATE SET calls = calls + 1`,
+        )
+        .run(chatId, day);
+    const row = database
+        .prepare("SELECT calls FROM ai_usage WHERE chat_id = ? AND day = ?")
+        .get(chatId, day) as { calls: number } | undefined;
+    return row?.calls ?? 1;
+}
+
+export function getAiCallsToday(chatId: number): number {
+    const row = getDb()
+        .prepare("SELECT calls FROM ai_usage WHERE chat_id = ? AND day = ?")
+        .get(chatId, todayKey()) as { calls: number } | undefined;
+    return row?.calls ?? 0;
 }
 
 /**
