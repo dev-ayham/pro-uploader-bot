@@ -349,7 +349,7 @@ const en: Strings = {
 
     upload_as_document: "Upload as document",
     spoiler: "Spoiler mode",
-    upload_page_desc: "📤 <b>Upload Settings</b>\n• Send as video or document\n• Hide content with spoiler.",
+    upload_page_desc: "📤 <b>Upload Settings</b>\n• Send as video or document.",
 
     rename_prefix: "✏️ Prefix",
     rename_suffix: "✏️ Suffix",
@@ -658,7 +658,7 @@ const fr: Strings = {
 
     upload_as_document: "Upload en document",
     spoiler: "Mode spoiler",
-    upload_page_desc: "📤 <b>Parametres d'upload</b>\n• Video ou document\n• Masquer avec spoiler.",
+    upload_page_desc: "📤 <b>Parametres d'upload</b>\n• Video ou document.",
 
     rename_prefix: "✏️ Prefixe",
     rename_suffix: "✏️ Suffixe",
@@ -812,7 +812,7 @@ const es: Strings = {
 
     upload_as_document: "Subir como documento",
     spoiler: "Modo spoiler",
-    upload_page_desc: "📤 <b>Ajustes de carga</b>\n• Video o documento\n• Ocultar con spoiler.",
+    upload_page_desc: "📤 <b>Ajustes de carga</b>\n• Video o documento.",
 
     rename_prefix: "✏️ Prefijo",
     rename_suffix: "✏️ Sufijo",
