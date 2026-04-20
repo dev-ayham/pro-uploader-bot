@@ -7,6 +7,8 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { MTProtoUploader, UploadProgress } from "./services/mtproto-uploader";
 import { shouldUseYtDlp, YtDlpOptions } from "./services/downloader";
+import { registerSettingsHandlers } from "./handlers/settings";
+import { closeDb } from "./services/db";
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
 const apiId = parseInt(process.env.API_ID || "0", 10);
@@ -62,7 +64,10 @@ const uploader = new MTProtoUploader(apiId, apiHash, botToken, ytDlpOptions);
 const strings = {
     ar: {
         welcome:
-            "👋 أهلاً بك في بوت الرفع الاحترافي!\n\nأرسل لي أي رابط وسأقوم برفعه لك إلى تيليجرام (يدعم حتى 2 جيجابايت).\n\nالمنصات المدعومة:\n• روابط مباشرة (mp4, mkv, pdf, zip...)\n• Instagram / Reels / Stories\n• YouTube / Shorts\n• TikTok\n• Twitter / X\n• Facebook / Reddit / Vimeo / Twitch / SoundCloud",
+            "👋 أهلاً بك في بوت الرفع الاحترافي!\n\nأرسل لي أي رابط وسأقوم برفعه لك إلى تيليجرام (يدعم حتى 2 جيجابايت).\n\nالمنصات المدعومة:\n• روابط مباشرة (mp4, mkv, pdf, zip...)\n• Instagram / Reels / Stories\n• YouTube / Shorts\n• TikTok\n• Twitter / X\n• Facebook / Reddit / Vimeo / Twitch / SoundCloud\n\nاستخدم /settings لتخصيص طريقة الرفع.",
+        settings_hint:
+            "استخدم /settings لتخصيص طريقة الرفع (Document / Spoiler / لغة...).",
+
         processing: "⏳ جاري المعالجة...",
         extracting: "🔍 جاري استخراج الفيديو من المنصة...",
         downloading: (p: number) => `📥 جاري التحميل: ${Math.round(p * 100)}%`,
@@ -99,6 +104,9 @@ function rememberProcessed(chatId: number, messageId: number): boolean {
 
 // --- Bot Handlers ---
 bot.command("start", (ctx) => ctx.reply(strings.ar.welcome));
+
+// /settings, /settings callback_query handlers etc.
+registerSettingsHandlers(bot);
 
 bot.on("message:text", async (ctx) => {
     const text = ctx.message.text;
@@ -273,6 +281,11 @@ const shutdown = async (signal: string) => {
         await bot.stop();
     } catch (err) {
         console.error("Error during bot.stop():", err);
+    }
+    try {
+        closeDb();
+    } catch (err) {
+        console.error("Error during closeDb():", err);
     }
     process.exit(0);
 };
