@@ -12,6 +12,7 @@ import {
     handlePendingInputIfAny,
     registerSettingsHandlers,
 } from "./handlers/settings";
+
 import {
     publishBotCommands,
     registerMenuHandlers,
@@ -34,7 +35,10 @@ import {
     type IntentAction,
 } from "./services/ai-intent";
 import { registerQuickCommandHandlers } from "./handlers/commands";
-import { registerAdminHandlers } from "./handlers/admin";
+import {
+    handleAdminPendingInputIfAny,
+    registerAdminHandlers,
+} from "./handlers/admin";
 import { isAdmin } from "./services/admin";
 import { t } from "./i18n";
 import { generateScreenshots } from "./services/screenshots";
@@ -748,6 +752,14 @@ bot.callbackQuery(/^q:(audio|best|1080|720|480|360|doc|cancel)$/, async (ctx) =>
 });
 
 bot.on("message:text", async (ctx) => {
+    // If the admin is mid-flow on an inline /admin button (typing a
+    // chat_id to look up / ban / unban, or a broadcast body), consume
+    // this message as the answer. Checked before the settings flow
+    // because admin flows take priority for admin chats.
+    if (await handleAdminPendingInputIfAny(ctx)) {
+        return;
+    }
+
     // If the user is mid-flow inside a /settings prompt (typing a rename
     // prefix / suffix), consume this message as the answer and don't try to
     // parse it as a URL.
