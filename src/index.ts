@@ -1,9 +1,12 @@
 import "dotenv/config";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { Bot } from "grammy";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { MTProtoUploader, UploadProgress } from "./services/mtproto-uploader";
-import { shouldUseYtDlp } from "./services/downloader";
+import { shouldUseYtDlp, YtDlpOptions } from "./services/downloader";
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
 const apiId = parseInt(process.env.API_ID || "0", 10);
@@ -16,8 +19,44 @@ if (!botToken || !apiId || !apiHash) {
     process.exit(1);
 }
 
+/**
+ * Materialize a yt-dlp cookies.txt file from the YT_DLP_COOKIES env var.
+ *
+ * Private Instagram posts, age-restricted YouTube videos and rate-limited
+ * TikTok / Twitter URLs require yt-dlp to present a logged-in session. The
+ * canonical way to do that headlessly is a Netscape-format cookies.txt
+ * exported from a real browser. We accept the file contents verbatim via an
+ * env var (Railway secret) and drop it on disk at startup so every yt-dlp
+ * invocation can pass it with `--cookies`.
+ */
+function materializeCookiesFile(): string | undefined {
+    const raw = process.env.YT_DLP_COOKIES;
+    if (!raw || !raw.trim()) return undefined;
+    const cookiesPath = path.join(os.tmpdir(), "yt-dlp-cookies.txt");
+    try {
+        fs.writeFileSync(cookiesPath, raw, { mode: 0o600 });
+        console.log(
+            `Loaded yt-dlp cookies from YT_DLP_COOKIES -> ${cookiesPath}`,
+        );
+        return cookiesPath;
+    } catch (err) {
+        console.error("Failed to write yt-dlp cookies file:", err);
+        return undefined;
+    }
+}
+
+const ytDlpOptions: YtDlpOptions = {
+    cookiesFile: materializeCookiesFile(),
+    userAgent:
+        process.env.YT_DLP_USER_AGENT ||
+        // Pretend to be a recent Chrome on macOS. Many extractors (Instagram,
+        // TikTok) silently serve different / better data to browser UAs.
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+};
+
 const bot = new Bot(botToken);
-const uploader = new MTProtoUploader(apiId, apiHash, botToken);
+const uploader = new MTProtoUploader(apiId, apiHash, botToken, ytDlpOptions);
 
 // --- i18n Simulation (Professional UI) ---
 const strings = {
