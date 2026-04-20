@@ -154,6 +154,84 @@ export function isDirectFileUrl(url: string): boolean {
     }
 }
 
+/**
+ * Media MIME type prefixes that we treat as uploadable when the URL has
+ * no recognizable file extension (signed S3/R2 links, `/download?id=...`
+ * style CDN URLs, Dropbox `?dl=1`, etc.). `application/octet-stream` is
+ * included on purpose — many CDNs serve binary downloads that way and it
+ * is still legitimately a file. `text/html` explicitly is NOT accepted,
+ * which is what distinguishes a download URL from a landing page.
+ */
+const MEDIA_MIME_PREFIXES = [
+    "video/",
+    "audio/",
+    "image/",
+    "application/pdf",
+    "application/zip",
+    "application/x-zip",
+    "application/x-rar",
+    "application/x-7z",
+    "application/x-tar",
+    "application/gzip",
+    "application/octet-stream",
+    "application/epub",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument",
+    "application/vnd.ms-excel",
+    "application/vnd.ms-powerpoint",
+];
+
+/**
+ * Async fallback for {@link isDirectFileUrl} that accepts URLs with no
+ * recognizable extension when the server advertises a downloadable MIME
+ * type via `HEAD`. This lets pre-signed S3/R2/Dropbox links, CDN
+ * `/download?id=...` endpoints, and similar opaque URLs take the same
+ * zero-egress `InputMediaDocumentExternal` fast path as `.mp4`-style
+ * direct links.
+ *
+ * Returns `true` for URLs that either (a) already match
+ * {@link isDirectFileUrl}, or (b) return a media-ish `Content-Type` on
+ * HEAD. Returns `false` for landing pages (`text/html`) or unreachable
+ * hosts. Never throws — callers treat `false` as "probably not a direct
+ * file, fall back to rejection".
+ */
+export async function probeIsDirectFile(url: string): Promise<boolean> {
+    if (isDirectFileUrl(url)) return true;
+    try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            return false;
+        }
+    } catch {
+        return false;
+    }
+    try {
+        const res = await axios.head(url, {
+            maxRedirects: 5,
+            timeout: 5_000,
+            validateStatus: () => true,
+        });
+        const raw = res.headers["content-type"];
+        const ct =
+            typeof raw === "string"
+                ? raw.toLowerCase()
+                : Array.isArray(raw)
+                ? String(raw[0] ?? "").toLowerCase()
+                : "";
+        if (!ct) return false;
+        const disposition =
+            typeof res.headers["content-disposition"] === "string"
+                ? res.headers["content-disposition"].toLowerCase()
+                : "";
+        // Explicit `attachment` disposition always wins — CDNs use it to
+        // force a download regardless of content type.
+        if (disposition.includes("attachment")) return true;
+        return MEDIA_MIME_PREFIXES.some((p) => ct.startsWith(p));
+    } catch {
+        return false;
+    }
+}
+
 export interface DownloadResult {
     filePath: string;
     filename: string;

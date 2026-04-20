@@ -13,7 +13,6 @@ import {
     downloadAudioWithYtDlp,
     downloadDirect,
     downloadWithYtDlp,
-    isDirectFileUrl,
     shouldUseYtDlp,
     YtDlpOptions,
 } from "./downloader";
@@ -303,22 +302,31 @@ export class MTProtoUploader {
     ): Promise<void> {
         await this.readyPromise;
 
-        // Zero-egress fast path: for simple direct-file URLs (e.g. an .mp4
-        // on a public CDN) with no options that need local file access
-        // (custom thumbnail, post-upload screenshots, rename, spoiler),
-        // hand the URL to Telegram via InputMediaDocumentExternal and let
-        // Telegram's own datacenters fetch the bytes. The file never
-        // touches our host, which keeps egress at $0 on any provider —
-        // a huge win at the 5 TB/month scale where Railway egress alone
-        // would cost ~$500. Falls through to the legacy download+upload
-        // path on any failure (unreachable URL, unsupported mime,
-        // Telegram WEBPAGE_MEDIA_EMPTY, etc.).
+        // Zero-egress fast path: hand the URL to Telegram via
+        // InputMediaDocumentExternal and let Telegram's own datacenters
+        // fetch the bytes. The file never touches our host, which keeps
+        // egress at $0 on any provider — a huge win at the 5 TB/month
+        // scale where Railway egress alone would cost ~$500. Falls
+        // through to the legacy download+upload path on any failure
+        // (unreachable URL, unsupported mime, Telegram
+        // WEBPAGE_MEDIA_EMPTY, timeout, etc.).
+        //
+        // Options that require a local file copy (thumbnail, spoiler,
+        // filename rename) disable the fast path entirely — Telegram's
+        // external-media API does not let us attach a thumb or override
+        // the document attributes.
+        //
+        // `postUpload` (screenshots) does not disable the fast path:
+        // when external delivery succeeds we still need the file for
+        // ffmpeg, but we fetch it in the background after the user
+        // already has their upload. On Railway this costs inbound
+        // bandwidth (free) + the tiny screenshot outbound (~MBs),
+        // saving the GBs of outbound that the full download+upload
+        // path would have cost.
         const canUseExternal =
             !shouldUseYtDlp(url) &&
-            isDirectFileUrl(url) &&
             !options.spoiler &&
             !options.thumbnailPath &&
-            !options.postUpload &&
             !options.renamePrefix &&
             !options.renameSuffix;
         if (canUseExternal) {
@@ -332,6 +340,17 @@ export class MTProtoUploader {
             );
             if (sent) {
                 onProgress?.({ phase: "upload", fraction: 1 });
+                if (options.postUpload) {
+                    // Detached: the user already has their file, and the
+                    // global concurrency slot (inFlightChats) has been
+                    // released by the caller. Errors are logged and
+                    // swallowed — a missing screenshot album is
+                    // infinitely preferable to a crash.
+                    void this.runPostUploadInBackground(
+                        url,
+                        options.postUpload,
+                    );
+                }
                 return;
             }
             // External fetch failed — fall through to download+upload so
@@ -631,6 +650,41 @@ export class MTProtoUploader {
                 } — falling back to local download`,
             );
             return false;
+        }
+    }
+
+    /**
+     * Fire-and-forget: after an external-URL upload has succeeded, Telegram
+     * already has the file but *we* don't have local bytes to feed to
+     * ffmpeg for screenshot generation. Pull the file down in the
+     * background, run the postUpload hook, and clean up. Any failure is
+     * logged and swallowed — the primary upload has already been
+     * delivered to the user so a missing screenshot album is strictly
+     * non-fatal.
+     */
+    private async runPostUploadInBackground(
+        url: string,
+        postUpload: (filePath: string, filename: string) => Promise<void>,
+    ): Promise<void> {
+        let downloaded: DownloadResult | undefined;
+        try {
+            downloaded = await downloadDirect(url, TEMP_DIR, {
+                maxFileSizeMb: this.ytDlpOptions.maxFileSizeMb,
+            });
+            await postUpload(downloaded.filePath, downloaded.filename);
+        } catch (err) {
+            console.error(
+                "[external-url] background postUpload hook failed:",
+                err instanceof Error ? err.message : err,
+            );
+        } finally {
+            if (downloaded?.filePath) {
+                try {
+                    fs.unlinkSync(downloaded.filePath);
+                } catch {
+                    // Already gone — nothing to do.
+                }
+            }
         }
     }
 

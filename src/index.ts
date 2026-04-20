@@ -10,6 +10,7 @@ import { MTProtoUploader, UploadProgress } from "./services/mtproto-uploader";
 import {
     FileTooLargeError,
     isDirectFileUrl,
+    probeIsDirectFile,
     shouldUseYtDlp,
     YtDlpOptions,
 } from "./services/downloader";
@@ -944,10 +945,17 @@ bot.on("message:text", async (ctx) => {
     // Obvious junk URLs (localhost, raw IPs, unknown TLDs that are also
     // not direct-file URLs) are rejected up-front with a friendly
     // message rather than being handed to yt-dlp which would error out
-    // with a technical "Unsupported URL" message.
+    // with a technical "Unsupported URL" message. For URLs without a
+    // known file extension we fall back to a HEAD probe — many signed
+    // CDN links (S3/R2/Dropbox, `/download?id=...`) advertise a media
+    // `Content-Type` without ever putting the extension in the path,
+    // and we want those to take the zero-egress external fast path too.
     if (!shouldUseYtDlp(url) && !isDirectFileUrl(url)) {
-        await ctx.reply(s.unsupported_url);
-        return;
+        const probed = await probeIsDirectFile(url);
+        if (!probed) {
+            await ctx.reply(s.unsupported_url);
+            return;
+        }
     }
 
     // Direct-download URLs (.mp4, .pdf, …) have no per-quality alternatives
