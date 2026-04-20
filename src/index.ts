@@ -755,18 +755,25 @@ async function handleInstagramProfile(
         bioLine +
         externalLine;
 
-    const kb = new InlineKeyboard()
-        .url(
-            "📸 فتح الصورة بدقة عالية",
-            profile.profilePicUrl || profile.profilePicUrlMedium,
-        )
-        .row()
-        .url(
-            "🌐 فتح الحساب على انستغرام",
-            `https://www.instagram.com/${encodeURIComponent(
-                profile.username,
-            )}/`,
-        );
+    // Build the keyboard incrementally: the HD-picture button is only
+    // safe to include when the URL is non-empty, since grammy's
+    // InlineKeyboard.url() accepts any string but the Bot API rejects
+    // buttons with an empty `url` (HTTP 400). Instagram occasionally
+    // omits both fields for deactivated / minimal accounts, and an
+    // unguarded .url("", ...) used to cascade into a failure on the
+    // photo send AND on the text-only fallback (both were built with
+    // the same broken keyboard).
+    const hdPicUrl = profile.profilePicUrl || profile.profilePicUrlMedium;
+    const kb = new InlineKeyboard();
+    if (hdPicUrl) {
+        kb.url("📸 فتح الصورة بدقة عالية", hdPicUrl).row();
+    }
+    kb.url(
+        "🌐 فتح الحساب على انستغرام",
+        `https://www.instagram.com/${encodeURIComponent(
+            profile.username,
+        )}/`,
+    );
 
     try {
         const photoUrl =
