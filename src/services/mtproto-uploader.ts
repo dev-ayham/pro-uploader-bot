@@ -19,18 +19,120 @@ import { resolveDataDir } from "./db";
 const TEMP_DIR = "/tmp";
 
 /**
- * Number of parallel upload workers used by GramJS's `uploadFile`. GramJS
- * splits the file into ~512 KB parts and uploads this many at once. The
- * library's default is 1; pushing it to 16 typically cuts wall-clock
- * upload time on Railway by 3-4x without observable throttling from
- * Telegram's MTProto DC. Override via the `MTPROTO_UPLOAD_WORKERS`
- * env var if you need to back off (e.g. on a very constrained network).
+ * Cap on the number of parallel upload workers used by GramJS's
+ * `uploadFile`. GramJS splits the file into 128–512 KB parts and uploads
+ * this many at once. The library's default is 1; we bump it up for
+ * throughput — but on large files (approaching Telegram's 2 GB MTProto
+ * limit) too many parallel `SaveBigFilePart` calls can trip
+ * `FloodWaitError`s from the MTProto DC, which GramJS then sleeps on
+ * inside the upload loop — producing the classic "upload stuck at 60 %"
+ * symptom. Default `8` is a safe balance; override via the
+ * `MTPROTO_UPLOAD_WORKERS` env var (lower to `4` if you still see
+ * stalls, raise on a very fast network with small files).
  */
-const MTPROTO_UPLOAD_WORKERS = (() => {
+const MTPROTO_UPLOAD_WORKERS_MAX = (() => {
     const raw = process.env.MTPROTO_UPLOAD_WORKERS;
     const n = raw ? Number.parseInt(raw, 10) : NaN;
-    return Number.isFinite(n) && n > 0 ? n : 16;
+    return Number.isFinite(n) && n > 0 ? n : 8;
 })();
+
+/**
+ * Pick the actual worker count to use for a file of the given size in
+ * bytes. We scale down for larger files because the upper bound for
+ * `saveBigFilePart` rate-limits is more easily tripped by many
+ * concurrent parts, and a FLOOD_WAIT on a single part blocks the whole
+ * batch (see the GramJS `uploadFile` loop — it awaits `Promise.all`
+ * per batch).
+ *
+ *   - ≤ 250 MB  → full worker count (small files, low DC pressure)
+ *   - ≤ 1   GB  → half (balances speed vs flood risk)
+ *   - >  1   GB → quarter (protects against stalls on 2 GB-ish
+ *                 uploads; never exceeds the configured cap)
+ *
+ * All tiers are clamped into [1, max] so a user who explicitly lowered
+ * `MTPROTO_UPLOAD_WORKERS` to throttle concurrency (e.g. on a very
+ * constrained network) never sees a larger worker count for larger
+ * files than they would for small ones.
+ */
+function workersFor(size: number): number {
+    const max = MTPROTO_UPLOAD_WORKERS_MAX;
+    if (size <= 250 * 1024 * 1024) return max;
+    if (size <= 1024 * 1024 * 1024)
+        return Math.min(max, Math.max(1, Math.floor(max / 2)));
+    return Math.min(max, Math.max(1, Math.floor(max / 4)));
+}
+
+/**
+ * Abort an upload if the GramJS progress callback has not advanced for
+ * this many milliseconds. Without this guard, a FLOOD_WAIT returned by
+ * Telegram for an impractically long duration (minutes) — or a silently
+ * dead TCP connection — would leave the user's upload frozen forever at
+ * whatever bucket it had last reached, and the chat's concurrency slot
+ * would stay occupied until the process restarted.
+ */
+const UPLOAD_STALL_TIMEOUT_MS = (() => {
+    const raw = process.env.UPLOAD_STALL_TIMEOUT_MS;
+    const n = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 180_000;
+})();
+
+/**
+ * Wrap an upload-producing async function so that if no progress
+ * fraction change is observed for `UPLOAD_STALL_TIMEOUT_MS`, the
+ * returned promise rejects with a clear `Upload stalled` error. The
+ * inner function receives a wrapped progress callback; call sites pass
+ * their existing `onProgress` through that wrapper so the watchdog sees
+ * the same fractions.
+ */
+async function withStallGuard<T>(
+    innerProgress: ((fraction: number) => void) | undefined,
+    fn: (
+        progressCb: (fraction: number) => void,
+    ) => Promise<T>,
+): Promise<T> {
+    let lastFraction = -1;
+    let lastTick = Date.now();
+    let rejectStall: ((err: Error) => void) | null = null;
+    let settled = false;
+
+    const tick = (fraction: number) => {
+        if (fraction !== lastFraction) {
+            lastFraction = fraction;
+            lastTick = Date.now();
+        }
+        innerProgress?.(fraction);
+    };
+
+    const watchdog = new Promise<never>((_, reject) => {
+        rejectStall = reject;
+        const id = setInterval(() => {
+            if (settled) {
+                clearInterval(id);
+                return;
+            }
+            if (Date.now() - lastTick > UPLOAD_STALL_TIMEOUT_MS) {
+                clearInterval(id);
+                reject(
+                    new Error(
+                        `Upload stalled: no progress for ${Math.round(
+                            UPLOAD_STALL_TIMEOUT_MS / 1000,
+                        )}s (last fraction ${lastFraction.toFixed(2)}). ` +
+                            "Likely a Telegram FLOOD_WAIT or network drop.",
+                    ),
+                );
+            }
+        }, 5_000);
+    });
+
+    try {
+        return await Promise.race([fn(tick), watchdog]);
+    } finally {
+        settled = true;
+        // Detach the unused reject so the watchdog promise can be GC'd.
+        rejectStall = null;
+        void rejectStall;
+    }
+}
 
 export interface UploadProgress {
     phase: "download" | "upload";
@@ -238,17 +340,20 @@ export class MTProtoUploader {
                     options.thumbnailPath,
                 );
             } else {
-                await this.client.sendFile(chatId, {
-                    file: toUpload,
-                    caption,
-                    parseMode: "html",
-                    forceDocument: options.asDocument === true,
-                    thumb: options.thumbnailPath,
-                    workers: MTPROTO_UPLOAD_WORKERS,
-                    progressCallback: (progress) => {
-                        onProgress?.({ phase: "upload", fraction: progress });
-                    },
-                });
+                await withStallGuard(
+                    (fraction) =>
+                        onProgress?.({ phase: "upload", fraction }),
+                    (progressCb) =>
+                        this.client.sendFile(chatId, {
+                            file: toUpload,
+                            caption,
+                            parseMode: "html",
+                            forceDocument: options.asDocument === true,
+                            thumb: options.thumbnailPath,
+                            workers: workersFor(stats.size),
+                            progressCallback: progressCb,
+                        }),
+                );
             }
 
             if (options.postUpload) {
@@ -316,24 +421,26 @@ export class MTProtoUploader {
             // Native Telegram audio message: mime=audio/mpeg + the Audio
             // attribute so Telegram renders the inline player rather than a
             // generic document tile.
-            await this.client.sendFile(chatId, {
-                file: toUpload,
-                caption,
-                parseMode: "html",
-                forceDocument: false,
-                voiceNote: false,
-                attributes: [
-                    new Api.DocumentAttributeAudio({
-                        duration: 0,
-                        voice: false,
-                        title: visibleName.replace(/\.mp3$/i, ""),
+            await withStallGuard(
+                (fraction) => onProgress?.({ phase: "upload", fraction }),
+                (progressCb) =>
+                    this.client.sendFile(chatId, {
+                        file: toUpload,
+                        caption,
+                        parseMode: "html",
+                        forceDocument: false,
+                        voiceNote: false,
+                        attributes: [
+                            new Api.DocumentAttributeAudio({
+                                duration: 0,
+                                voice: false,
+                                title: visibleName.replace(/\.mp3$/i, ""),
+                            }),
+                        ],
+                        workers: workersFor(stats.size),
+                        progressCallback: progressCb,
                     }),
-                ],
-                workers: MTPROTO_UPLOAD_WORKERS,
-                progressCallback: (progress) => {
-                    onProgress?.({ phase: "upload", fraction: progress });
-                },
-            });
+            );
         } finally {
             if (downloaded) {
                 try {
@@ -357,17 +464,23 @@ export class MTProtoUploader {
         const mimeType =
             (mime.lookup(filename) as string) || "application/octet-stream";
 
-        const uploadedFile = await this.client.uploadFile({
-            file,
-            workers: MTPROTO_UPLOAD_WORKERS,
-            onProgress: (progress) => {
-                // GramJS's raw uploadFile reports progress as a BigInteger-ish
-                // fraction in [0,1].
-                const fraction =
-                    typeof progress === "number" ? progress : Number(progress);
-                onProgress?.({ phase: "upload", fraction });
-            },
-        });
+        const uploadedFile = await withStallGuard(
+            (fraction) => onProgress?.({ phase: "upload", fraction }),
+            (progressCb) =>
+                this.client.uploadFile({
+                    file,
+                    workers: workersFor(file.size),
+                    onProgress: (progress) => {
+                        // GramJS's raw uploadFile reports progress as a
+                        // BigInteger-ish fraction in [0,1].
+                        const fraction =
+                            typeof progress === "number"
+                                ? progress
+                                : Number(progress);
+                        progressCb(fraction);
+                    },
+                }),
+        );
 
         // Custom thumbnail (if any) is uploaded as a separate InputFile so we
         // can attach it to the InputMediaUploadedDocument below. Failures
