@@ -195,6 +195,21 @@ function escapeHtmlForMsg(s: string): string {
 }
 
 // --- Bot Handlers ---
+
+// Ban guard must run FIRST so it intercepts every update — including
+// /start, /help, inline callback queries, etc. — before any command
+// handler below gets a chance to reply. grammy runs middleware in
+// registration order and command handlers stop the chain on match, so
+// placing the guard after the register* calls would leak commands to
+// banned users. Admins are never considered banned.
+bot.use(async (ctx, next) => {
+    const chatId = ctx.chat?.id;
+    if (chatId && !isAdmin(chatId) && isBanned(chatId)) {
+        return;
+    }
+    await next();
+});
+
 // /start, /menu, /help, /about, /cancel and the top-level inline nav.
 registerMenuHandlers(bot);
 
@@ -209,21 +224,6 @@ registerQuickCommandHandlers(bot);
 // Every handler short-circuits for non-admin chat ids so accidental
 // callers see nothing.
 registerAdminHandlers(bot);
-
-// Ban guard: drop any update from a chat_id on the banlist before it
-// reaches downstream handlers. Admins are never considered banned, and
-// /unban is dispatched before this middleware via bot.command registrations
-// above — middleware runs in registration order and grammy runs commands
-// through the same middleware chain, so we only short-circuit when the
-// current chat is banned AND not admin. This keeps ban state easy to
-// reverse from chat without shell access.
-bot.use(async (ctx, next) => {
-    const chatId = ctx.chat?.id;
-    if (chatId && !isAdmin(chatId) && isBanned(chatId)) {
-        return;
-    }
-    await next();
-});
 
 bot.on("message:photo", async (ctx) => {
     // Photos are only interesting when the user is mid-flow on /settings →
@@ -494,10 +494,23 @@ async function runUpload(
  * Returns `null` when no classification can be made so the caller can
  * surface `ai_intent_unknown` to the user.
  */
+interface FollowUpResult {
+    action: IntentAction;
+    rateLimited?: boolean;
+    /**
+     * True when an OpenAI call was actually made (and therefore a daily
+     * budget unit was consumed). Callers that want to run a *second*
+     * OpenAI request (e.g. the chat fallback) should skip their own
+     * budget increment when this is true so a single user message only
+     * ever charges 1 unit end-to-end.
+     */
+    apiCallMade?: boolean;
+}
+
 async function classifyFollowUp(
     chatId: number,
     text: string,
-): Promise<{ action: IntentAction; rateLimited?: boolean } | null> {
+): Promise<FollowUpResult | null> {
     const byKeyword = parseIntentByKeywords(text);
     if (byKeyword !== "unknown") {
         return { action: byKeyword };
@@ -523,16 +536,18 @@ async function classifyFollowUp(
         return null;
     }
     if (used > AI_DAILY_LIMIT) {
-        return { action: "unknown", rateLimited: true };
+        return { action: "unknown", rateLimited: true, apiCallMade: true };
     }
 
     const intent = await parseIntentWithOpenAI(text, {
         apiKey,
         model: OPENAI_MODEL,
     });
-    if (intent.action === "unknown") return null;
+    if (intent.action === "unknown") {
+        return { action: "unknown", apiCallMade: true };
+    }
     setCachedIntent(chatId, text, intent.action);
-    return { action: intent.action };
+    return { action: intent.action, apiCallMade: true };
 }
 
 /**
@@ -545,6 +560,7 @@ async function respondWithOpenAIChat(
     ctx: Context,
     chatId: number,
     text: string,
+    options: { budgetAlreadyConsumed?: boolean } = {},
 ): Promise<void> {
     const s = t(langOf(chatId));
     const apiKey = process.env.OPENAI_API_KEY;
@@ -553,17 +569,30 @@ async function respondWithOpenAIChat(
         return;
     }
 
-    let used: number;
-    try {
-        used = incrementAiCallsToday(chatId);
-    } catch (err) {
-        console.error("incrementAiCallsToday failed:", err);
-        await ctx.reply(s.ai_intent_unknown);
-        return;
-    }
-    if (used > AI_DAILY_LIMIT) {
-        await ctx.reply(s.ai_daily_limit(AI_DAILY_LIMIT));
-        return;
+    // When the intent classifier already consumed a budget unit on this
+    // message (e.g. it called OpenAI and got "unknown"), the chat
+    // fallback re-uses that same budget unit instead of charging twice.
+    // We still respect the cap by re-reading the counter without
+    // incrementing.
+    if (options.budgetAlreadyConsumed) {
+        const usedSoFar = getAiCallsToday(chatId);
+        if (usedSoFar > AI_DAILY_LIMIT) {
+            await ctx.reply(s.ai_daily_limit(AI_DAILY_LIMIT));
+            return;
+        }
+    } else {
+        let used: number;
+        try {
+            used = incrementAiCallsToday(chatId);
+        } catch (err) {
+            console.error("incrementAiCallsToday failed:", err);
+            await ctx.reply(s.ai_intent_unknown);
+            return;
+        }
+        if (used > AI_DAILY_LIMIT) {
+            await ctx.reply(s.ai_daily_limit(AI_DAILY_LIMIT));
+            return;
+        }
     }
 
     const reply = await chatWithOpenAI(text, {
@@ -745,6 +774,7 @@ bot.on("message:text", async (ctx) => {
         // are the hot path. Only when classification fails — or the user
         // has never sent a URL — do we spend an extra AI call to answer
         // conversationally.
+        let classifierSpentBudget = false;
         if (prefs.lastUrl) {
             const resolved = await classifyFollowUp(chatId, text);
             if (resolved) {
@@ -768,10 +798,15 @@ bot.on("message:text", async (ctx) => {
                         return;
                     // fall through to chat fallback on "unknown"
                 }
+                // The classifier already spent a budget unit if it hit
+                // OpenAI; the chat fallback must not charge again.
+                classifierSpentBudget = resolved.apiCallMade === true;
             }
         }
 
-        await respondWithOpenAIChat(ctx, chatId, text);
+        await respondWithOpenAIChat(ctx, chatId, text, {
+            budgetAlreadyConsumed: classifierSpentBudget,
+        });
         return;
     }
 
