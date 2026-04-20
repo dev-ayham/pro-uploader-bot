@@ -1,13 +1,9 @@
 node_modules
 dist
-.git
-.gitignore
 .env
 .env.*
 npm-debug.log*
 *.log
-README.md
-PRO_DEPLOY_GUIDE.md
 data
 *.db
 *.db-journal
