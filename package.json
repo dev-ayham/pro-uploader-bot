@@ -16,7 +16,9 @@
     "dotenv": "^16.3.1",
     "grammy": "^1.20.0",
     "hono": "^4.6.0",
+    "https-proxy-agent": "^5.0.1",
     "mime-types": "^2.1.35",
+    "socks-proxy-agent": "^7.0.0",
     "telegram": "^2.19.0"
   },
   "devDependencies": {
