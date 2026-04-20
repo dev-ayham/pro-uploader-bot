@@ -107,10 +107,14 @@ const IG_WEB_PROFILE_ENDPOINT =
 /**
  * Thrown for a rate-limit / login-wall response. The calling layer
  * surfaces it with a friendlier message (asking the user to retry
- * later / hinting that cookies may be stale).
+ * later / hinting that cookies may be stale). `status` carries the
+ * final HTTP code so it can be shown in the user-facing error.
  */
 export class InstagramRateLimitedError extends Error {
-    constructor(message: string) {
+    constructor(
+        message: string,
+        public readonly status: number,
+    ) {
         super(message);
         this.name = "InstagramRateLimitedError";
     }
@@ -127,17 +131,11 @@ export class InstagramUserNotFoundError extends Error {
     }
 }
 
-/**
- * Fetch a profile's public metadata via Instagram's internal web API.
- * Requires a browser-style User-Agent and the `x-ig-app-id` header;
- * cookies are optional but dramatically improve success rates and are
- * required for any private-ish account. Callers should pass the same
- * cookies file that yt-dlp uses (`YT_DLP_COOKIES`).
- */
-export async function fetchInstagramProfile(
+function buildHeaders(
     username: string,
-    cookiesFile?: string,
-): Promise<InstagramProfile> {
+    cookieHeader?: string,
+    csrfToken?: string,
+): Record<string, string> {
     const headers: Record<string, string> = {
         "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
@@ -150,65 +148,131 @@ export async function fetchInstagramProfile(
         "x-requested-with": "XMLHttpRequest",
         Referer: `https://www.instagram.com/${username}/`,
     };
+    if (cookieHeader) headers.Cookie = cookieHeader;
+    if (csrfToken) headers["x-csrftoken"] = csrfToken;
+    return headers;
+}
 
-    if (cookiesFile && fs.existsSync(cookiesFile)) {
-        try {
-            const raw = fs.readFileSync(cookiesFile, "utf8");
-            const cookies = parseNetscapeCookies(raw);
-            if (Object.keys(cookies).length > 0) {
-                headers.Cookie = buildCookieHeader(cookies);
-                if (cookies.csrftoken) {
-                    headers["x-csrftoken"] = cookies.csrftoken;
-                }
-            }
-        } catch (err) {
-            console.warn(
-                "Failed to read cookies file for Instagram profile:",
-                err,
-            );
-        }
-    }
-
-    let res;
+function loadCookiesFromFile(
+    cookiesFile?: string,
+): { cookieHeader: string; csrf?: string } | undefined {
+    if (!cookiesFile || !fs.existsSync(cookiesFile)) return undefined;
     try {
-        res = await axios.get(IG_WEB_PROFILE_ENDPOINT, {
+        const raw = fs.readFileSync(cookiesFile, "utf8");
+        const cookies = parseNetscapeCookies(raw);
+        if (Object.keys(cookies).length === 0) return undefined;
+        return {
+            cookieHeader: buildCookieHeader(cookies),
+            csrf: cookies.csrftoken,
+        };
+    } catch (err) {
+        console.warn(
+            "Failed to read cookies file for Instagram profile:",
+            err,
+        );
+        return undefined;
+    }
+}
+
+async function requestWebProfileInfo(
+    username: string,
+    headers: Record<string, string>,
+): Promise<{ status: number; data: unknown }> {
+    try {
+        const res = await axios.get(IG_WEB_PROFILE_ENDPOINT, {
             params: { username },
             headers,
             timeout: 20_000,
             validateStatus: () => true,
         });
+        return { status: res.status, data: res.data };
     } catch (err) {
         throw new Error(
             `Network error talking to Instagram: ${(err as Error).message}`,
         );
     }
+}
 
-    if (res.status === 404) {
-        throw new InstagramUserNotFoundError(
-            `Instagram returned 404 for @${username}`,
-        );
+/**
+ * Fetch a profile's public metadata via Instagram's internal web API.
+ * Requires a browser-style User-Agent and the `x-ig-app-id` header;
+ * cookies are optional but dramatically improve success rates and are
+ * required for any private-ish account. Callers should pass the same
+ * cookies file that yt-dlp uses (`YT_DLP_COOKIES`).
+ *
+ * Strategy: if cookies are available we try them first, but fall back
+ * to an unauthenticated request on 401/403 since stale cookies are
+ * actively rejected by Instagram while the public endpoint still
+ * serves some profiles without any session.
+ */
+export async function fetchInstagramProfile(
+    username: string,
+    cookiesFile?: string,
+): Promise<InstagramProfile> {
+    const cookies = loadCookiesFromFile(cookiesFile);
+
+    const attempts: Array<{ label: string; headers: Record<string, string> }> =
+        [];
+    if (cookies) {
+        attempts.push({
+            label: "with-cookies",
+            headers: buildHeaders(username, cookies.cookieHeader, cookies.csrf),
+        });
     }
-    if (res.status === 401 || res.status === 403) {
-        throw new InstagramRateLimitedError(
-            `Instagram refused the request (HTTP ${res.status}); ` +
-                `cookies may be missing or expired.`,
+    attempts.push({
+        label: "no-cookies",
+        headers: buildHeaders(username),
+    });
+
+    let lastStatus = 0;
+    let data: unknown = undefined;
+
+    for (const attempt of attempts) {
+        const res = await requestWebProfileInfo(username, attempt.headers);
+        lastStatus = res.status;
+
+        if (res.status === 200) {
+            data = res.data;
+            break;
+        }
+
+        console.warn(
+            `[instagram-profile] @${username} ${attempt.label} -> HTTP ${res.status}`,
         );
-    }
-    if (res.status === 429) {
-        throw new InstagramRateLimitedError(
-            "Instagram rate-limited the request (HTTP 429).",
-        );
-    }
-    if (res.status >= 400) {
-        throw new Error(`Instagram HTTP ${res.status}`);
+
+        if (res.status === 404) {
+            throw new InstagramUserNotFoundError(
+                `Instagram returned 404 for @${username}`,
+            );
+        }
+        // For 401/403/429 we keep trying the remaining strategies (if
+        // any) before giving up. For unexpected 5xx / network-ish codes
+        // we also continue — the next attempt might get lucky.
     }
 
-    const data = res.data as
+    if (data === undefined) {
+        if (lastStatus === 401 || lastStatus === 403) {
+            throw new InstagramRateLimitedError(
+                `Instagram refused the request (HTTP ${lastStatus}); ` +
+                    `cookies may be missing or expired.`,
+                lastStatus,
+            );
+        }
+        if (lastStatus === 429) {
+            throw new InstagramRateLimitedError(
+                "Instagram rate-limited the request (HTTP 429).",
+                429,
+            );
+        }
+        throw new Error(`Instagram HTTP ${lastStatus || "?"}`);
+    }
+
+    const parsed = data as
         | {
               data?: { user?: Record<string, unknown> };
           }
         | undefined;
-    const user = data?.data?.user;
+    const user = parsed?.data?.user;
     if (!user) {
         throw new InstagramUserNotFoundError(
             `No user node in Instagram response for @${username}`,
