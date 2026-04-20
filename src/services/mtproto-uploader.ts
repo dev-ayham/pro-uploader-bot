@@ -7,6 +7,7 @@ import * as fs from "fs";
 import * as mime from "mime-types";
 import {
     DownloadResult,
+    downloadAudioWithYtDlp,
     downloadDirect,
     downloadWithYtDlp,
     shouldUseYtDlp,
@@ -178,6 +179,77 @@ export class MTProtoUploader {
                     console.error("postUpload hook threw:", err);
                 }
             }
+        } finally {
+            if (downloaded) {
+                try {
+                    fs.unlinkSync(downloaded.filePath);
+                } catch {
+                    // best-effort cleanup
+                }
+            }
+        }
+    }
+
+    /**
+     * Download audio only from a URL via yt-dlp (`-x --audio-format mp3`)
+     * and send it as a Telegram audio message (native audio player, not a
+     * generic document). Intended for AI intents of the form "give me the
+     * audio" / "بدي ياه صوت" where the user has already received the full
+     * video and now wants just the soundtrack.
+     */
+    async uploadAudioFromUrl(
+        chatId: number | string,
+        url: string,
+        caption: string,
+        onProgress?: (progress: UploadProgress) => void,
+        options: Pick<UploadOptions, "renamePrefix" | "renameSuffix"> = {},
+    ): Promise<void> {
+        await this.readyPromise;
+
+        let downloaded: DownloadResult | undefined;
+        try {
+            downloaded = await downloadAudioWithYtDlp(
+                url,
+                TEMP_DIR,
+                (fraction) => {
+                    onProgress?.({ phase: "download", fraction });
+                },
+                this.ytDlpOptions,
+            );
+
+            const stats = fs.statSync(downloaded.filePath);
+            const visibleName = applyRename(
+                downloaded.filename,
+                options.renamePrefix,
+                options.renameSuffix,
+            );
+            const toUpload = new CustomFile(
+                visibleName,
+                stats.size,
+                downloaded.filePath,
+            );
+
+            // Native Telegram audio message: mime=audio/mpeg + the Audio
+            // attribute so Telegram renders the inline player rather than a
+            // generic document tile.
+            await this.client.sendFile(chatId, {
+                file: toUpload,
+                caption,
+                parseMode: "html",
+                forceDocument: false,
+                voiceNote: false,
+                attributes: [
+                    new Api.DocumentAttributeAudio({
+                        duration: 0,
+                        voice: false,
+                        title: visibleName.replace(/\.mp3$/i, ""),
+                    }),
+                ],
+                workers: 4,
+                progressCallback: (progress) => {
+                    onProgress?.({ phase: "upload", fraction: progress });
+                },
+            });
         } finally {
             if (downloaded) {
                 try {

@@ -246,3 +246,131 @@ export async function downloadWithYtDlp(
         });
     });
 }
+
+/**
+ * Download the best-available audio stream and transcode it to MP3 via
+ * ffmpeg (yt-dlp does that for us when --audio-format=mp3 is set).
+ * Intended for "give me the audio" follow-ups where the user already saw
+ * the full video upload and just wants the soundtrack.
+ */
+export async function downloadAudioWithYtDlp(
+    url: string,
+    destDir: string,
+    onProgress?: (fraction: number) => void,
+    options: YtDlpOptions = {},
+): Promise<DownloadResult> {
+    await fs.promises.mkdir(destDir, { recursive: true });
+    const prefix = `${Date.now()}`;
+    const outputTemplate = path.join(
+        destDir,
+        `${prefix}_%(title).80B_%(id)s.%(ext)s`,
+    );
+
+    const args = [
+        "--no-playlist",
+        "--no-warnings",
+        "--no-part",
+        "--restrict-filenames",
+        "--newline",
+        "-x",
+        "--audio-format",
+        "mp3",
+        "--audio-quality",
+        "0",
+        "-o",
+        outputTemplate,
+        "--print",
+        "after_move:filepath",
+        "--retries",
+        "10",
+        "--fragment-retries",
+        "10",
+        "--sleep-requests",
+        "1",
+    ];
+
+    if (options.cookiesFile && fs.existsSync(options.cookiesFile)) {
+        args.push("--cookies", options.cookiesFile);
+    }
+    if (options.userAgent) {
+        args.push("--user-agent", options.userAgent);
+    }
+    args.push(url);
+
+    return await new Promise<DownloadResult>((resolve, reject) => {
+        const proc = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
+        let stdout = "";
+        let stderr = "";
+
+        proc.stdout.on("data", (chunk: Buffer) => {
+            stdout += chunk.toString();
+        });
+
+        proc.stderr.on("data", (chunk: Buffer) => {
+            const text = chunk.toString();
+            stderr += text;
+            if (!onProgress) return;
+            for (const line of text.split("\n")) {
+                const m = /\[download\]\s+([\d.]+)%/.exec(line);
+                if (m) {
+                    const fraction = Math.min(
+                        1,
+                        Math.max(0, parseFloat(m[1]) / 100),
+                    );
+                    try {
+                        onProgress(fraction);
+                    } catch {
+                        // ignore callback errors
+                    }
+                }
+            }
+        });
+
+        const cleanupPartials = () => {
+            try {
+                for (const entry of fs.readdirSync(destDir)) {
+                    if (entry.startsWith(`${prefix}_`)) {
+                        try {
+                            fs.unlinkSync(path.join(destDir, entry));
+                        } catch {
+                            // ignore
+                        }
+                    }
+                }
+            } catch {
+                // ignore
+            }
+        };
+
+        proc.on("error", (err) => {
+            cleanupPartials();
+            reject(err);
+        });
+
+        proc.on("close", (code) => {
+            if (code !== 0) {
+                cleanupPartials();
+                reject(
+                    new Error(
+                        `yt-dlp exited with code ${code}: ${stderr.trim() || stdout.trim()}`,
+                    ),
+                );
+                return;
+            }
+            const lines = stdout
+                .split("\n")
+                .map((l) => l.trim())
+                .filter((l) => l.length > 0);
+            const filePath = lines[lines.length - 1];
+            if (!filePath || !fs.existsSync(filePath)) {
+                reject(
+                    new Error(
+                        `yt-dlp completed but the audio file was not found (stdout: ${stdout.trim()})`,
+                    ),
+                );
+                return;
+            }
+            resolve({ filePath, filename: path.basename(filePath) });
+        });
+    });
+}
