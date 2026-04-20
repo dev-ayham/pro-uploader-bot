@@ -1,5 +1,12 @@
 import { Bot, Context, InlineKeyboard } from "grammy";
 import { getUserPrefs, updateUserPrefs, UserPrefs } from "../services/db";
+import {
+    clearPendingInput,
+    getPendingInput,
+    setPendingInput,
+} from "../services/pending-input";
+
+const MAX_RENAME_LEN = 64;
 
 /**
  * Render the current preferences as an inline keyboard. Each button shows
@@ -8,7 +15,7 @@ import { getUserPrefs, updateUserPrefs, UserPrefs } from "../services/db";
  */
 function buildKeyboard(prefs: UserPrefs): InlineKeyboard {
     const check = (on: boolean): string => (on ? "✅" : "⬜");
-    return new InlineKeyboard()
+    const kb = new InlineKeyboard()
         .text(
             `${check(prefs.uploadAsDocument)} الرفع كملف (Document)`,
             "settings:toggle:uploadAsDocument",
@@ -24,7 +31,20 @@ function buildKeyboard(prefs: UserPrefs): InlineKeyboard {
             "settings:toggle:language",
         )
         .row()
+        .text("✏️ بادئة التسمية", "settings:rename:prefix:set")
+        .text(
+            prefs.renamePrefix ? "🗑️ مسح البادئة" : "—",
+            prefs.renamePrefix ? "settings:rename:prefix:clear" : "settings:noop",
+        )
+        .row()
+        .text("✏️ لاحقة التسمية", "settings:rename:suffix:set")
+        .text(
+            prefs.renameSuffix ? "🗑️ مسح اللاحقة" : "—",
+            prefs.renameSuffix ? "settings:rename:suffix:clear" : "settings:noop",
+        )
+        .row()
         .text("❌ إغلاق", "settings:close");
+    return kb;
 }
 
 function renderSettingsText(prefs: UserPrefs): string {
@@ -60,6 +80,9 @@ function escapeHtml(s: string): string {
 export function registerSettingsHandlers(bot: Bot): void {
     bot.command("settings", async (ctx) => {
         if (!ctx.chat) return;
+        // Cancel any stale "awaiting input" state so /settings always lands
+        // in a known-good state.
+        clearPendingInput(ctx.chat.id);
         const prefs = getUserPrefs(ctx.chat.id);
         await ctx.reply(renderSettingsText(prefs), {
             parse_mode: "HTML",
@@ -97,7 +120,35 @@ export function registerSettingsHandlers(bot: Bot): void {
         await updateSettingsMessage(ctx, next);
     });
 
+    bot.callbackQuery(/^settings:rename:(prefix|suffix):(set|clear)$/, async (ctx) => {
+        const chatId = ctx.chat?.id;
+        if (!chatId) {
+            await ctx.answerCallbackQuery();
+            return;
+        }
+        const which = ctx.match?.[1] as "prefix" | "suffix";
+        const action = ctx.match?.[2] as "set" | "clear";
+        if (action === "clear") {
+            const next = updateUserPrefs(chatId, {
+                [which === "prefix" ? "renamePrefix" : "renameSuffix"]: "",
+            });
+            await updateSettingsMessage(ctx, next);
+            return;
+        }
+        // set: park state, ask for text in the next message.
+        setPendingInput(chatId, {
+            kind: which === "prefix" ? "rename_prefix" : "rename_suffix",
+        });
+        const prompt =
+            which === "prefix"
+                ? "✏️ أرسل البادئة التي تريد إضافتها قبل اسم كل ملف (حتى 64 حرفاً). أرسل / للإلغاء."
+                : "✏️ أرسل اللاحقة التي تريد إضافتها بعد اسم كل ملف وقبل الامتداد (حتى 64 حرفاً). أرسل / للإلغاء.";
+        await ctx.reply(prompt);
+        await ctx.answerCallbackQuery();
+    });
+
     bot.callbackQuery("settings:close", async (ctx) => {
+        if (ctx.chat) clearPendingInput(ctx.chat.id);
         try {
             await ctx.deleteMessage();
         } catch {
@@ -105,6 +156,44 @@ export function registerSettingsHandlers(bot: Bot): void {
         }
         await ctx.answerCallbackQuery();
     });
+
+    bot.callbackQuery("settings:noop", async (ctx) => {
+        await ctx.answerCallbackQuery();
+    });
+}
+
+/**
+ * Attempt to consume the message as an answer to a pending settings prompt
+ * (e.g. "type your rename prefix"). Returns true when consumed so the
+ * caller skips its own URL-parsing fallback.
+ */
+export async function handlePendingInputIfAny(ctx: Context): Promise<boolean> {
+    if (!ctx.chat || !ctx.message?.text) return false;
+    const chatId = ctx.chat.id;
+    const pending = getPendingInput(chatId);
+    if (!pending) return false;
+
+    const text = ctx.message.text;
+    // "/" alone cancels; any /command also cancels to avoid swallowing them.
+    if (text === "/" || text.startsWith("/")) {
+        clearPendingInput(chatId);
+        await ctx.reply("تم الإلغاء.");
+        return true;
+    }
+    if (text.length > MAX_RENAME_LEN) {
+        await ctx.reply(
+            `⚠️ النص طويل (الحد الأقصى ${MAX_RENAME_LEN} حرفاً). حاول مرة أخرى.`,
+        );
+        return true;
+    }
+    if (pending.kind === "rename_prefix") {
+        updateUserPrefs(chatId, { renamePrefix: text });
+    } else if (pending.kind === "rename_suffix") {
+        updateUserPrefs(chatId, { renameSuffix: text });
+    }
+    clearPendingInput(chatId);
+    await ctx.reply("✅ تم الحفظ. استخدم /settings لرؤية الإعدادات الحالية.");
+    return true;
 }
 
 async function updateSettingsMessage(
