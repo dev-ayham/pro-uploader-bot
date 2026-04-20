@@ -14,6 +14,15 @@ import {
 } from "./handlers/settings";
 import { closeDb, getUserPrefs } from "./services/db";
 import { generateScreenshots } from "./services/screenshots";
+import {
+    hasThumbnail,
+    saveThumbnailFromFile,
+    thumbnailPath,
+} from "./services/thumbnails";
+import {
+    clearPendingInput,
+    getPendingInput,
+} from "./services/pending-input";
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
 const apiId = parseInt(process.env.API_ID || "0", 10);
@@ -182,6 +191,59 @@ bot.command("start", (ctx) => ctx.reply(strings.ar.welcome));
 // /settings, /settings callback_query handlers etc.
 registerSettingsHandlers(bot);
 
+bot.on("message:photo", async (ctx) => {
+    // Photos are only interesting when the user is mid-flow on /settings →
+    // "ضبط الصورة المصغّرة". Any other photo is ignored silently.
+    const chatId = ctx.chat.id;
+    const pending = getPendingInput(chatId);
+    if (!pending || pending.kind !== "thumbnail_photo") return;
+
+    const photos = ctx.message.photo;
+    const biggest = photos[photos.length - 1];
+    if (!biggest) return;
+    let tmpPath: string | undefined;
+    try {
+        const fileInfo = await ctx.api.getFile(biggest.file_id);
+        if (!fileInfo.file_path) {
+            throw new Error("Telegram did not return a file_path");
+        }
+        // Download the photo through the Bot API. `bot.api.getFile` returns
+        // the relative path; we concat with the configured Bot API base URL.
+        const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileInfo.file_path}`;
+        const res = await fetch(downloadUrl);
+        if (!res.ok) {
+            throw new Error(`Telegram getFile returned HTTP ${res.status}`);
+        }
+        tmpPath = path.join(
+            os.tmpdir(),
+            `tg-thumb-${chatId}-${Date.now()}.src`,
+        );
+        const buffer = Buffer.from(await res.arrayBuffer());
+        fs.writeFileSync(tmpPath, buffer);
+        await saveThumbnailFromFile(chatId, tmpPath);
+        clearPendingInput(chatId);
+        await ctx.reply(
+            "✅ تم حفظ الصورة المصغّرة. ستُستخدم لجميع الملفات القادمة. افتح /settings للإدارة.",
+        );
+    } catch (err) {
+        console.error("thumbnail save failed:", err);
+        const detail = err instanceof Error ? err.message : String(err);
+        clearPendingInput(chatId);
+        await ctx.reply(
+            `❌ تعذّر حفظ الصورة المصغّرة: <code>${escapeHtmlForMsg(detail)}</code>`,
+            { parse_mode: "HTML" },
+        );
+    } finally {
+        if (tmpPath) {
+            try {
+                fs.unlinkSync(tmpPath);
+            } catch {
+                // best-effort
+            }
+        }
+    }
+});
+
 bot.on("message:text", async (ctx) => {
     // If the user is mid-flow inside a /settings prompt (typing a rename
     // prefix / suffix), consume this message as the answer and don't try to
@@ -296,6 +358,9 @@ bot.on("message:text", async (ctx) => {
                     spoiler: prefs.spoiler,
                     renamePrefix: prefs.renamePrefix,
                     renameSuffix: prefs.renameSuffix,
+                    thumbnailPath: hasThumbnail(ctx.chat.id)
+                        ? thumbnailPath(ctx.chat.id)
+                        : undefined,
                     postUpload:
                         prefs.screenshotsCount > 0
                             ? async (filePath, filename) => {

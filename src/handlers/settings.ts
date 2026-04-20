@@ -5,6 +5,7 @@ import {
     getPendingInput,
     setPendingInput,
 } from "../services/pending-input";
+import { deleteThumbnail, hasThumbnail } from "../services/thumbnails";
 
 const MAX_RENAME_LEN = 64;
 
@@ -13,7 +14,7 @@ const MAX_RENAME_LEN = 64;
  * a ✅ / ⬜ indicator next to the label so the user can see the current
  * state at a glance. Tapping a toggle flips it and re-renders in place.
  */
-function buildKeyboard(prefs: UserPrefs): InlineKeyboard {
+function buildKeyboard(prefs: UserPrefs, thumbSet: boolean): InlineKeyboard {
     const check = (on: boolean): string => (on ? "✅" : "⬜");
     const kb = new InlineKeyboard()
         .text(
@@ -48,11 +49,22 @@ function buildKeyboard(prefs: UserPrefs): InlineKeyboard {
             prefs.renameSuffix ? "settings:rename:suffix:clear" : "settings:noop",
         )
         .row()
+        .text(
+            thumbSet
+                ? "🖼️ تغيير الصورة المصغّرة"
+                : "🖼️ ضبط الصورة المصغّرة",
+            "settings:thumb:set",
+        )
+        .text(
+            thumbSet ? "🗑️ حذف المصغّرة" : "—",
+            thumbSet ? "settings:thumb:clear" : "settings:noop",
+        )
+        .row()
         .text("❌ إغلاق", "settings:close");
     return kb;
 }
 
-function renderSettingsText(prefs: UserPrefs): string {
+function renderSettingsText(prefs: UserPrefs, thumbSet: boolean): string {
     const yes = "✅ مفعّل";
     const no = "⬜ معطّل";
     const prefix = prefs.renamePrefix
@@ -68,7 +80,8 @@ function renderSettingsText(prefs: UserPrefs): string {
         `• اللغة: ${prefs.language === "ar" ? "العربية" : "English"}\n` +
         `• بادئة إعادة التسمية: ${prefix}\n` +
         `• لاحقة إعادة التسمية: ${suffix}\n` +
-        `• لقطات الفيديو: ${prefs.screenshotsCount > 0 ? prefs.screenshotsCount : no}\n\n` +
+        `• لقطات الفيديو: ${prefs.screenshotsCount > 0 ? prefs.screenshotsCount : no}\n` +
+        `• الصورة المصغّرة: ${thumbSet ? "✅ مضبوطة" : no}\n\n` +
         `<i>اضغط على أي خيار لتغييره.</i>`
     );
 }
@@ -90,9 +103,10 @@ export function registerSettingsHandlers(bot: Bot): void {
         // in a known-good state.
         clearPendingInput(ctx.chat.id);
         const prefs = getUserPrefs(ctx.chat.id);
-        await ctx.reply(renderSettingsText(prefs), {
+        const thumbSet = hasThumbnail(ctx.chat.id);
+        await ctx.reply(renderSettingsText(prefs, thumbSet), {
             parse_mode: "HTML",
-            reply_markup: buildKeyboard(prefs),
+            reply_markup: buildKeyboard(prefs, thumbSet),
         });
     });
 
@@ -168,6 +182,25 @@ export function registerSettingsHandlers(bot: Bot): void {
         await ctx.answerCallbackQuery();
     });
 
+    bot.callbackQuery(/^settings:thumb:(set|clear)$/, async (ctx) => {
+        const chatId = ctx.chat?.id;
+        if (!chatId) {
+            await ctx.answerCallbackQuery();
+            return;
+        }
+        const action = ctx.match?.[1];
+        if (action === "clear") {
+            deleteThumbnail(chatId);
+            await updateSettingsMessage(ctx, getUserPrefs(chatId), false);
+            return;
+        }
+        setPendingInput(chatId, { kind: "thumbnail_photo" });
+        await ctx.reply(
+            "🖼️ أرسل الآن صورة لاستخدامها كصورة مصغّرة لجميع الملفات القادمة. أرسل / للإلغاء.",
+        );
+        await ctx.answerCallbackQuery();
+    });
+
     bot.callbackQuery("settings:close", async (ctx) => {
         if (ctx.chat) clearPendingInput(ctx.chat.id);
         try {
@@ -220,11 +253,12 @@ export async function handlePendingInputIfAny(ctx: Context): Promise<boolean> {
 async function updateSettingsMessage(
     ctx: Context,
     prefs: UserPrefs,
+    thumbSet: boolean = ctx.chat ? hasThumbnail(ctx.chat.id) : false,
 ): Promise<void> {
     try {
-        await ctx.editMessageText(renderSettingsText(prefs), {
+        await ctx.editMessageText(renderSettingsText(prefs, thumbSet), {
             parse_mode: "HTML",
-            reply_markup: buildKeyboard(prefs),
+            reply_markup: buildKeyboard(prefs, thumbSet),
         });
     } catch {
         // Most likely "message is not modified" — harmless.
