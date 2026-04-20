@@ -33,8 +33,6 @@ function buildUploadKeyboard(prefs: UserPrefs): InlineKeyboard {
             "settings:toggle:uploadAsDocument",
         )
         .row()
-        .text(`${check(prefs.spoiler)} ${s.spoiler}`, "settings:toggle:spoiler")
-        .row()
         .text(s.settings_back, "settings:page:main");
 }
 
@@ -79,7 +77,6 @@ function renderText(page: Page, prefs: UserPrefs, thumbSet: boolean): string {
     const summary =
         `\n\n${s.settings_summary}\n` +
         `${prefs.uploadAsDocument ? s.enabled : s.disabled} ${s.upload_as_document}\n` +
-        `${prefs.spoiler ? s.enabled : s.disabled} ${s.spoiler}\n` +
         `${LANG_FLAG[prefs.language]} ${LANG_NATIVE[prefs.language]}\n` +
         `✏️ ${prefs.renamePrefix ? `<code>${escapeHtml(prefs.renamePrefix)}</code>` : "—"} / ${prefs.renameSuffix ? `<code>${escapeHtml(prefs.renameSuffix)}</code>` : "—"}\n` +
         `${s.screenshots_label(prefs.screenshotsCount)}\n` +
@@ -163,10 +160,6 @@ export function registerSettingsHandlers(bot: Bot): void {
                 updateUserPrefs(chatId, {
                     uploadAsDocument: !current.uploadAsDocument,
                 });
-                await updateSettingsMessage(ctx, "upload");
-                return;
-            case "spoiler":
-                updateUserPrefs(chatId, { spoiler: !current.spoiler });
                 await updateSettingsMessage(ctx, "upload");
                 return;
             default:

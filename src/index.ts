@@ -183,7 +183,7 @@ registerMenuHandlers(bot);
 // /settings, /settings callback_query handlers etc.
 registerSettingsHandlers(bot);
 
-// Quick commands: /doc /spoiler /prefix /suffix /screenshots /thumb
+// Quick commands: /doc /prefix /suffix /screenshots /thumb
 // /thumb_clear /reset /platforms /id /ping /stats
 registerQuickCommandHandlers(bot);
 
@@ -351,7 +351,6 @@ bot.on("message:text", async (ctx) => {
                 },
                 {
                     asDocument: prefs.uploadAsDocument,
-                    spoiler: prefs.spoiler,
                     renamePrefix: prefs.renamePrefix,
                     renameSuffix: prefs.renameSuffix,
                     thumbnailPath: hasThumbnail(ctx.chat.id)
