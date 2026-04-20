@@ -46,14 +46,20 @@ const MTPROTO_UPLOAD_WORKERS_MAX = (() => {
  *
  *   - ≤ 250 MB  → full worker count (small files, low DC pressure)
  *   - ≤ 1   GB  → half (balances speed vs flood risk)
- *   - >  1   GB → quarter, minimum 4 (protects against stalls on
- *                 2 GB-ish uploads)
+ *   - >  1   GB → quarter (protects against stalls on 2 GB-ish
+ *                 uploads; never exceeds the configured cap)
+ *
+ * All tiers are clamped into [1, max] so a user who explicitly lowered
+ * `MTPROTO_UPLOAD_WORKERS` to throttle concurrency (e.g. on a very
+ * constrained network) never sees a larger worker count for larger
+ * files than they would for small ones.
  */
 function workersFor(size: number): number {
     const max = MTPROTO_UPLOAD_WORKERS_MAX;
     if (size <= 250 * 1024 * 1024) return max;
-    if (size <= 1024 * 1024 * 1024) return Math.max(1, Math.floor(max / 2));
-    return Math.max(4, Math.floor(max / 4));
+    if (size <= 1024 * 1024 * 1024)
+        return Math.min(max, Math.max(1, Math.floor(max / 2)));
+    return Math.min(max, Math.max(1, Math.floor(max / 4)));
 }
 
 /**
