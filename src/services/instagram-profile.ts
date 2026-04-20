@@ -1,6 +1,9 @@
 import fs from "node:fs";
 
 import axios from "axios";
+import type { AxiosRequestConfig } from "axios";
+import { HttpsProxyAgent } from "https-proxy-agent";
+import { SocksProxyAgent } from "socks-proxy-agent";
 
 /**
  * Minimal subset of the Instagram `web_profile_info` response that we
@@ -174,17 +177,84 @@ function loadCookiesFromFile(
     }
 }
 
+/**
+ * Build the axios request config with an optional proxy tunnel. We
+ * cache the agent at module scope so repeated calls don't re-parse
+ * the URL / re-create sockets for every Instagram request.
+ *
+ * The proxy URL is read from `INSTAGRAM_PROXY_URL`. Examples:
+ *   - http://user:pass@proxy.example.com:8080
+ *   - socks5://127.0.0.1:1080
+ *   - socks5h://user:pass@proxy.example.com:1080
+ * Anything else (or unset / empty) means "no proxy", i.e. direct.
+ */
+let cachedProxyAgent: ReturnType<typeof buildProxyAgent> = { agent: null };
+let cachedProxyUrl: string | undefined = undefined;
+
+function buildProxyAgent(url: string | undefined): {
+    agent: HttpsProxyAgent | SocksProxyAgent | null;
+    reason?: string;
+} {
+    if (!url || !url.trim()) return { agent: null };
+    try {
+        const parsed = new URL(url);
+        const proto = parsed.protocol.toLowerCase();
+        if (proto.startsWith("socks")) {
+            return { agent: new SocksProxyAgent(url) };
+        }
+        if (proto === "http:" || proto === "https:") {
+            return { agent: new HttpsProxyAgent(url) };
+        }
+        return {
+            agent: null,
+            reason: `Unsupported proxy scheme: ${parsed.protocol}`,
+        };
+    } catch (err) {
+        return {
+            agent: null,
+            reason: `Invalid INSTAGRAM_PROXY_URL: ${(err as Error).message}`,
+        };
+    }
+}
+
+function getProxyAgent() {
+    const url = process.env.INSTAGRAM_PROXY_URL;
+    if (url !== cachedProxyUrl) {
+        cachedProxyUrl = url;
+        cachedProxyAgent = buildProxyAgent(url);
+        if (cachedProxyAgent.agent) {
+            console.log(
+                "[instagram-profile] using proxy from INSTAGRAM_PROXY_URL",
+            );
+        } else if (cachedProxyAgent.reason) {
+            console.warn(
+                `[instagram-profile] proxy disabled: ${cachedProxyAgent.reason}`,
+            );
+        }
+    }
+    return cachedProxyAgent.agent;
+}
+
 async function requestWebProfileInfo(
     username: string,
     headers: Record<string, string>,
 ): Promise<{ status: number; data: unknown }> {
+    const agent = getProxyAgent();
+    const config: AxiosRequestConfig = {
+        params: { username },
+        headers,
+        timeout: 20_000,
+        validateStatus: () => true,
+    };
+    if (agent) {
+        config.httpAgent = agent;
+        config.httpsAgent = agent;
+        // axios respects env proxy by default; disable that to avoid
+        // double-proxying or conflicting with our agent.
+        config.proxy = false;
+    }
     try {
-        const res = await axios.get(IG_WEB_PROFILE_ENDPOINT, {
-            params: { username },
-            headers,
-            timeout: 20_000,
-            validateStatus: () => true,
-        });
+        const res = await axios.get(IG_WEB_PROFILE_ENDPOINT, config);
         return { status: res.status, data: res.data };
     } catch (err) {
         throw new Error(
