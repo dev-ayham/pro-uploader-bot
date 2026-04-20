@@ -146,11 +146,14 @@ export interface DownloadResult {
 }
 
 /**
- * Download via plain HTTP for direct file URLs.
+ * Download via plain HTTP for direct file URLs. When `maxFileSizeMb` is set
+ * and the remote server advertises a larger `Content-Length`, a
+ * {@link FileTooLargeError} is thrown without streaming any bytes.
  */
 export async function downloadDirect(
     url: string,
     destDir: string,
+    options: { maxFileSizeMb?: number } = {},
 ): Promise<DownloadResult> {
     const parsedUrl = new URL(url);
     const filename =
@@ -163,8 +166,38 @@ export async function downloadDirect(
         responseType: "stream",
     });
 
+    // Server-advertised size check. Not all servers return Content-Length
+    // (e.g. chunked transfer), in which case we rely on the per-chunk guard
+    // inside the stream pipeline below.
+    const limitMb = options.maxFileSizeMb;
+    const limitBytes = limitMb && limitMb > 0 ? limitMb * 1024 * 1024 : 0;
+    const contentLength = Number(response.headers["content-length"]);
+    if (
+        limitBytes > 0 &&
+        Number.isFinite(contentLength) &&
+        contentLength > limitBytes
+    ) {
+        response.data.destroy?.();
+        throw new FileTooLargeError(limitMb!, contentLength);
+    }
+
     const writer = fs.createWriteStream(filePath);
     response.data.pipe(writer);
+
+    // Streaming guard: abort mid-download if the body exceeds the limit
+    // despite a missing / lying Content-Length header.
+    let received = 0;
+    let sizeExceeded = false;
+    if (limitBytes > 0) {
+        response.data.on("data", (chunk: Buffer) => {
+            received += chunk.length;
+            if (received > limitBytes) {
+                sizeExceeded = true;
+                response.data.destroy?.();
+                writer.destroy();
+            }
+        });
+    }
 
     try {
         await new Promise<void>((resolve, reject) => {
@@ -173,6 +206,14 @@ export async function downloadDirect(
             response.data.on("error", reject);
         });
     } catch (err) {
+        if (sizeExceeded) {
+            try {
+                fs.unlinkSync(filePath);
+            } catch {
+                // best-effort cleanup
+            }
+            throw new FileTooLargeError(limitMb!, received);
+        }
         // Clean up the partial file before propagating the error so the
         // caller does not have to know we ever created one.
         try {
@@ -209,6 +250,24 @@ export interface YtDlpOptions {
      * if the requested height is unavailable.
      */
     maxHeight?: number;
+    /**
+     * Hard cap on the downloaded file size in megabytes. When set, passed to
+     * yt-dlp as `--max-filesize` so the extractor refuses to start a download
+     * that exceeds this limit instead of letting it fill the disk.
+     */
+    maxFileSizeMb?: number;
+}
+
+/**
+ * Error thrown by {@link downloadDirect} when the remote server advertises a
+ * `Content-Length` larger than the configured per-upload limit. Callers
+ * should translate this to a user-facing message rather than a stack trace.
+ */
+export class FileTooLargeError extends Error {
+    constructor(public readonly limitMb: number, public readonly actualBytes: number) {
+        super(`File exceeds ${limitMb}MB limit (actual ${actualBytes} bytes)`);
+        this.name = "FileTooLargeError";
+    }
 }
 
 export async function downloadWithYtDlp(
@@ -258,6 +317,9 @@ export async function downloadWithYtDlp(
         "1",
     ];
 
+    if (options.maxFileSizeMb && options.maxFileSizeMb > 0) {
+        args.push("--max-filesize", `${options.maxFileSizeMb}M`);
+    }
     if (options.cookiesFile && fs.existsSync(options.cookiesFile)) {
         args.push("--cookies", options.cookiesFile);
     }
@@ -391,6 +453,9 @@ export async function downloadAudioWithYtDlp(
         "1",
     ];
 
+    if (options.maxFileSizeMb && options.maxFileSizeMb > 0) {
+        args.push("--max-filesize", `${options.maxFileSizeMb}M`);
+    }
     if (options.cookiesFile && fs.existsSync(options.cookiesFile)) {
         args.push("--cookies", options.cookiesFile);
     }

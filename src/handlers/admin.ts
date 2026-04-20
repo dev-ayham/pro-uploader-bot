@@ -1,3 +1,5 @@
+import { execSync } from "child_process";
+import * as os from "os";
 import { Bot, Context, InlineKeyboard } from "grammy";
 import {
     aggregateStats,
@@ -120,7 +122,8 @@ function buildAdminMenu(): InlineKeyboard {
         .text("📢 Broadcast", "admin:broadcast").row()
         .text("🚫 Ban", "admin:ban")
         .text("✅ Unban", "admin:unban").row()
-        .text("📋 Bans list", "admin:bans");
+        .text("📋 Bans list", "admin:bans")
+        .text("📟 Resources", "admin:resources");
 }
 
 function adminMenuHeader(): string {
@@ -293,6 +296,100 @@ async function runUnban(ctx: Context, id: number): Promise<void> {
     await ctx.reply(`✅ تم رفع الحظر عن <code>${id}</code>.`, {
         parse_mode: "HTML",
     });
+}
+
+/**
+ * Best-effort disk-usage for the filesystem hosting `target` (by default
+ * the OS tmpdir where downloads are staged). We shell out to `df -Pk` so
+ * the result is accurate across volumes — Node has no built-in statvfs.
+ * Returns `null` when `df` is unavailable or its output is unexpected.
+ */
+function getDiskUsage(
+    target: string,
+): { totalBytes: number; usedBytes: number; freeBytes: number } | null {
+    try {
+        const out = execSync(`df -Pk ${target}`, {
+            encoding: "utf8",
+            timeout: 2_000,
+        });
+        const lines = out.trim().split("\n");
+        if (lines.length < 2) return null;
+        const parts = lines[lines.length - 1].trim().split(/\s+/);
+        // Posix df: Filesystem 1024-blocks Used Available Capacity Mounted
+        const totalKb = Number.parseInt(parts[1], 10);
+        const usedKb = Number.parseInt(parts[2], 10);
+        const freeKb = Number.parseInt(parts[3], 10);
+        if (!Number.isFinite(totalKb)) return null;
+        return {
+            totalBytes: totalKb * 1024,
+            usedBytes: usedKb * 1024,
+            freeBytes: freeKb * 1024,
+        };
+    } catch {
+        return null;
+    }
+}
+
+function formatBytes(n: number): string {
+    if (!Number.isFinite(n) || n < 0) return "—";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    let v = n;
+    while (v >= 1024 && i < units.length - 1) {
+        v /= 1024;
+        i++;
+    }
+    return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+/**
+ * Live snapshot of the container's resource usage so admins can tell at a
+ * glance whether the bot is close to saturation before publicly announcing
+ * or onboarding more users. All values come from Node's `os` / `process`
+ * modules plus a `df` shell call; no external dependency required.
+ */
+async function runResources(ctx: Context): Promise<void> {
+    const mem = process.memoryUsage();
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    const memPct = totalMem > 0 ? Math.round((usedMem / totalMem) * 100) : 0;
+
+    const cpus = os.cpus();
+    const load = os.loadavg();
+    // 1-minute load normalised to CPU count — >1.0 means the scheduler has
+    // more runnable work than cores, which on our workload usually means
+    // concurrent yt-dlp + ffmpeg runs are contending.
+    const normalizedLoad = cpus.length > 0 ? load[0] / cpus.length : load[0];
+
+    const tmpDir = os.tmpdir();
+    const disk = getDiskUsage(tmpDir);
+
+    const uptimeSec = process.uptime();
+
+    const lines = [
+        "📟 <b>Resources</b>",
+        "",
+        "<b>Memory</b>",
+        `  RSS: <code>${formatBytes(mem.rss)}</code>`,
+        `  Heap: <code>${formatBytes(mem.heapUsed)}</code> / <code>${formatBytes(mem.heapTotal)}</code>`,
+        `  Host: <code>${formatBytes(usedMem)}</code> / <code>${formatBytes(totalMem)}</code> (${memPct}%)`,
+        "",
+        "<b>CPU</b>",
+        `  Cores: <code>${cpus.length}</code>`,
+        `  Load avg: <code>${load.map((n) => n.toFixed(2)).join(" / ")}</code> (1m norm: <code>${normalizedLoad.toFixed(2)}</code>)`,
+        "",
+        "<b>Disk (tmp)</b>",
+        disk
+            ? `  <code>${tmpDir}</code>: <code>${formatBytes(disk.usedBytes)}</code> / <code>${formatBytes(disk.totalBytes)}</code> (free: <code>${formatBytes(disk.freeBytes)}</code>)`
+            : `  <code>${tmpDir}</code>: <i>unavailable</i>`,
+        "",
+        `<b>Process uptime:</b> <code>${formatSeconds(uptimeSec)}</code>`,
+        `<b>Node:</b> <code>${process.version}</code>`,
+        `<b>Platform:</b> <code>${process.platform}/${process.arch}</code>`,
+    ];
+
+    await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
 }
 
 async function runBans(ctx: Context): Promise<void> {
@@ -491,6 +588,11 @@ export function registerAdminHandlers(bot: Bot): void {
         await runBans(ctx);
     });
 
+    bot.command("resources", async (ctx) => {
+        if (!requireAdmin(ctx)) return;
+        await runResources(ctx);
+    });
+
     // --- Callback queries from the inline menu --------------------------
 
     bot.callbackQuery("admin:ai_status", async (ctx) => {
@@ -518,6 +620,15 @@ export function registerAdminHandlers(bot: Bot): void {
         }
         await ctx.answerCallbackQuery();
         await runBans(ctx);
+    });
+
+    bot.callbackQuery("admin:resources", async (ctx) => {
+        if (!requireAdmin(ctx)) {
+            await ctx.answerCallbackQuery();
+            return;
+        }
+        await ctx.answerCallbackQuery();
+        await runResources(ctx);
     });
 
     // Arg-taking actions: arm pending-input and prompt for the value.

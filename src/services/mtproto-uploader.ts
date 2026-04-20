@@ -180,7 +180,7 @@ export class MTProtoUploader {
                         onProgress?.({ phase: "download", fraction });
                     },
                     // Merge per-call overrides (max height) on top of the
-                    // instance-wide cookies / user-agent defaults.
+                    // instance-wide cookies / user-agent / size-cap defaults.
                     { ...this.ytDlpOptions, maxHeight: options.maxHeight },
                 );
             } else {
@@ -188,7 +188,9 @@ export class MTProtoUploader {
                 // extractor could also handle this but `axios` stream is
                 // faster and avoids the subprocess overhead for the common
                 // case.
-                downloaded = await downloadDirect(url, TEMP_DIR);
+                downloaded = await downloadDirect(url, TEMP_DIR, {
+                    maxFileSizeMb: this.ytDlpOptions.maxFileSizeMb,
+                });
                 onProgress?.({ phase: "download", fraction: 1 });
             }
 
