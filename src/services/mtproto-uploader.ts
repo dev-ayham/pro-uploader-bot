@@ -7,6 +7,7 @@ import {
     downloadDirect,
     downloadWithYtDlp,
     shouldUseYtDlp,
+    YtDlpOptions,
 } from "./downloader";
 
 const TEMP_DIR = "/tmp";
@@ -19,8 +20,14 @@ export interface UploadProgress {
 export class MTProtoUploader {
     private client: TelegramClient;
     private readyPromise: Promise<void>;
+    private ytDlpOptions: YtDlpOptions;
 
-    constructor(apiId: number, apiHash: string, botToken: string) {
+    constructor(
+        apiId: number,
+        apiHash: string,
+        botToken: string,
+        ytDlpOptions: YtDlpOptions = {},
+    ) {
         this.client = new TelegramClient(new StringSession(""), apiId, apiHash, {
             connectionRetries: 5,
         });
@@ -31,6 +38,7 @@ export class MTProtoUploader {
         // not crash the process via Node's unhandled-rejection handler before
         // any caller has a chance to await and handle the error.
         this.readyPromise.catch(() => {});
+        this.ytDlpOptions = ytDlpOptions;
     }
 
     async ready(): Promise<void> {
@@ -57,6 +65,7 @@ export class MTProtoUploader {
                     (fraction) => {
                         onProgress?.({ phase: "download", fraction });
                     },
+                    this.ytDlpOptions,
                 );
             } else {
                 // Plain direct URL (.mp4, .pdf, ...). yt-dlp's generic

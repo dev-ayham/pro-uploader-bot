@@ -107,10 +107,23 @@ export async function downloadDirect(
  * Download via yt-dlp for platform URLs (Instagram, YouTube, TikTok, ...).
  * Resolves with the absolute path of the downloaded file.
  */
+export interface YtDlpOptions {
+    /**
+     * Absolute path to a Netscape-format cookies.txt file. When set, yt-dlp
+     * is invoked with `--cookies <path>` so it can access content that
+     * requires a logged-in session (private Instagram, age-restricted
+     * YouTube, rate-limit-protected URLs, etc).
+     */
+    cookiesFile?: string;
+    /** Browser User-Agent string forwarded with `--user-agent`. */
+    userAgent?: string;
+}
+
 export async function downloadWithYtDlp(
     url: string,
     destDir: string,
     onProgress?: (fraction: number) => void,
+    options: YtDlpOptions = {},
 ): Promise<DownloadResult> {
     await fs.promises.mkdir(destDir, { recursive: true });
 
@@ -133,8 +146,24 @@ export async function downloadWithYtDlp(
         outputTemplate,
         "--print",
         "after_move:filepath",
-        url,
+        // Small polite delay between retries to avoid triggering Instagram /
+        // TikTok rate-limits when the same IP hits them repeatedly.
+        "--retries",
+        "10",
+        "--fragment-retries",
+        "10",
+        "--sleep-requests",
+        "1",
     ];
+
+    if (options.cookiesFile && fs.existsSync(options.cookiesFile)) {
+        args.push("--cookies", options.cookiesFile);
+    }
+    if (options.userAgent) {
+        args.push("--user-agent", options.userAgent);
+    }
+
+    args.push(url);
 
     return await new Promise<DownloadResult>((resolve, reject) => {
         const proc = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
