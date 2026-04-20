@@ -8,7 +8,7 @@ import { Hono } from "hono";
 import { MTProtoUploader, UploadProgress } from "./services/mtproto-uploader";
 import { shouldUseYtDlp, YtDlpOptions } from "./services/downloader";
 import { registerSettingsHandlers } from "./handlers/settings";
-import { closeDb } from "./services/db";
+import { closeDb, getUserPrefs } from "./services/db";
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
 const apiId = parseInt(process.env.API_ID || "0", 10);
@@ -183,6 +183,9 @@ bot.on("message:text", async (ctx) => {
             phase: "",
             bucket: -1,
         };
+        // Read the user's stored toggles so /settings actually does something.
+        const prefs = getUserPrefs(ctx.chat.id);
+
         try {
             await uploader.uploadFromUrl(
                 ctx.chat.id,
@@ -206,6 +209,10 @@ bot.on("message:text", async (ctx) => {
                             ? strings.ar.downloading(progress.fraction)
                             : strings.ar.uploading(progress.fraction);
                     await editStatus(text);
+                },
+                {
+                    asDocument: prefs.uploadAsDocument,
+                    spoiler: prefs.spoiler,
                 },
             );
 
