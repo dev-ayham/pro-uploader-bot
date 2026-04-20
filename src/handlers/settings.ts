@@ -21,7 +21,7 @@ function buildHomeKeyboard(lang: Lang): InlineKeyboard {
         .text(s.settings_media, "settings:page:media")
         .text(`${LANG_FLAG[lang]} ${s.menu_language}`, "menu:lang:pick")
         .row()
-        .text(s.menu_close, "settings:close");
+        .text(s.menu_back, "menu:home");
 }
 
 function buildUploadKeyboard(prefs: UserPrefs): InlineKeyboard {
@@ -231,16 +231,6 @@ export function registerSettingsHandlers(bot: Bot): void {
         setPendingInput(chatId, { kind: "thumbnail_photo" });
         const lang = getUserPrefs(chatId).language;
         await ctx.reply(t(lang).thumb_prompt);
-        await ctx.answerCallbackQuery();
-    });
-
-    bot.callbackQuery("settings:close", async (ctx) => {
-        if (ctx.chat) clearPendingInput(ctx.chat.id);
-        try {
-            await ctx.deleteMessage();
-        } catch {
-            // best-effort
-        }
         await ctx.answerCallbackQuery();
     });
 

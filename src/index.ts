@@ -16,7 +16,8 @@ import {
     publishBotCommands,
     registerMenuHandlers,
 } from "./handlers/menu";
-import { closeDb, getUserPrefs } from "./services/db";
+import { closeDb, getUserPrefs, incrementUploadsCount } from "./services/db";
+import { registerQuickCommandHandlers } from "./handlers/commands";
 import { t } from "./i18n";
 import { generateScreenshots } from "./services/screenshots";
 import {
@@ -181,6 +182,10 @@ registerMenuHandlers(bot);
 
 // /settings, /settings callback_query handlers etc.
 registerSettingsHandlers(bot);
+
+// Quick commands: /doc /spoiler /prefix /suffix /screenshots /thumb
+// /thumb_clear /reset /platforms /id /ping /stats
+registerQuickCommandHandlers(bot);
 
 bot.on("message:photo", async (ctx) => {
     // Photos are only interesting when the user is mid-flow on /settings →
@@ -367,6 +372,14 @@ bot.on("message:text", async (ctx) => {
             );
 
             await editStatus(s.success);
+            // Bump the lifetime uploads counter so /stats reflects the user's
+            // activity. Purely cosmetic; a failed counter bump must not
+            // impact the upload that just succeeded.
+            try {
+                incrementUploadsCount(ctx.chat.id);
+            } catch (err) {
+                console.error("incrementUploadsCount failed:", err);
+            }
         } catch (error) {
             console.error("Upload failed:", error);
             const detail =

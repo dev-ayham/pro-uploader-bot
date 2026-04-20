@@ -17,8 +17,7 @@ function escapeHtml(s: string): string {
         .replace(/>/g, "&gt;");
 }
 
-/** The "home" inline keyboard shown by /start and /menu. Two columns on top
- *  (main actions), language switch row, then close. */
+/** The "home" inline keyboard shown by /start and /menu. */
 function mainMenuKeyboard(lang: Lang): InlineKeyboard {
     const s = t(lang);
     return new InlineKeyboard()
@@ -28,23 +27,25 @@ function mainMenuKeyboard(lang: Lang): InlineKeyboard {
         .text(s.menu_about, "menu:about")
         .text(`${LANG_FLAG[lang]} ${s.menu_language}`, "menu:lang:pick")
         .row()
-        .text(s.menu_close, "menu:close");
+        .text(s.menu_platforms, "menu:platforms")
+        .text(s.menu_stats, "menu:stats");
 }
 
 function helpKeyboard(lang: Lang): InlineKeyboard {
     const s = t(lang);
     return new InlineKeyboard()
         .text(s.menu_settings, "menu:settings")
-        .text(s.menu_back, "menu:home")
-        .row()
-        .text(s.menu_close, "menu:close");
+        .text(s.menu_back, "menu:home");
 }
 
 function aboutKeyboard(lang: Lang): InlineKeyboard {
     const s = t(lang);
-    return new InlineKeyboard()
-        .text(s.menu_back, "menu:home")
-        .text(s.menu_close, "menu:close");
+    return new InlineKeyboard().text(s.menu_back, "menu:home");
+}
+
+function simpleBackKeyboard(lang: Lang): InlineKeyboard {
+    const s = t(lang);
+    return new InlineKeyboard().text(s.menu_back, "menu:home");
 }
 
 /** Picker that swaps the chat's locale. One row per language. */
@@ -159,13 +160,25 @@ export function registerMenuHandlers(bot: Bot): void {
         await safeEdit(ctx, buildWelcome(next, name), mainMenuKeyboard(next));
     });
 
-    bot.callbackQuery("menu:close", async (ctx) => {
-        try {
-            await ctx.deleteMessage();
-        } catch {
-            // best-effort
+    bot.callbackQuery("menu:platforms", async (ctx) => {
+        const lang = ctx.chat ? getUserPrefs(ctx.chat.id).language : "ar";
+        await safeEdit(ctx, t(lang).platforms_text, simpleBackKeyboard(lang));
+    });
+
+    bot.callbackQuery("menu:stats", async (ctx) => {
+        if (!ctx.chat) {
+            await ctx.answerCallbackQuery();
+            return;
         }
-        await ctx.answerCallbackQuery();
+        const prefs = getUserPrefs(ctx.chat.id);
+        const { formatJoinedDate } = await import("../i18n");
+        const s = t(prefs.language);
+        const joined = formatJoinedDate(prefs.createdAt, prefs.language);
+        await safeEdit(
+            ctx,
+            s.stats_text(prefs.uploadsCount, joined, `${LANG_FLAG[prefs.language]} ${LANG_NATIVE[prefs.language]}`),
+            simpleBackKeyboard(prefs.language),
+        );
     });
 }
 
@@ -242,53 +255,212 @@ function inferLangFromTelegram(ctx: Context): Lang {
  * language automatically.
  */
 export async function publishBotCommands(bot: Bot): Promise<void> {
-    const perLang: Record<Lang, Array<{ command: string; description: string }>> = {
-        ar: [
-            { command: "start", description: "بدء البوت" },
-            { command: "menu", description: "القائمة الرئيسية" },
-            { command: "settings", description: "الإعدادات" },
-            { command: "help", description: "المساعدة" },
-            { command: "about", description: "عن البوت" },
-            { command: "lang", description: "تغيير اللغة" },
-            { command: "cancel", description: "إلغاء الإدخال" },
-        ],
-        en: [
-            { command: "start", description: "Start the bot" },
-            { command: "menu", description: "Main menu" },
-            { command: "settings", description: "Settings" },
-            { command: "help", description: "Help" },
-            { command: "about", description: "About the bot" },
-            { command: "lang", description: "Change language" },
-            { command: "cancel", description: "Cancel current input" },
-        ],
-        tr: [
-            { command: "start", description: "Botu baslat" },
-            { command: "menu", description: "Ana menu" },
-            { command: "settings", description: "Ayarlar" },
-            { command: "help", description: "Yardim" },
-            { command: "about", description: "Hakkinda" },
-            { command: "lang", description: "Dil degistir" },
-            { command: "cancel", description: "Girisi iptal et" },
-        ],
-        fr: [
-            { command: "start", description: "Demarrer le bot" },
-            { command: "menu", description: "Menu principal" },
-            { command: "settings", description: "Parametres" },
-            { command: "help", description: "Aide" },
-            { command: "about", description: "A propos" },
-            { command: "lang", description: "Changer la langue" },
-            { command: "cancel", description: "Annuler la saisie" },
-        ],
-        es: [
-            { command: "start", description: "Iniciar el bot" },
-            { command: "menu", description: "Menu principal" },
-            { command: "settings", description: "Ajustes" },
-            { command: "help", description: "Ayuda" },
-            { command: "about", description: "Acerca de" },
-            { command: "lang", description: "Cambiar idioma" },
-            { command: "cancel", description: "Cancelar entrada" },
-        ],
-    };
+    // A single row in `cmds` has the command name plus its description in
+    // every supported language. Keeping everything as one matrix (instead
+    // of one hand-edited array per locale) makes it far easier to add new
+    // commands without missing a translation.
+    const cmds: Array<{
+        command: string;
+        desc: Record<Lang, string>;
+    }> = [
+        {
+            command: "start",
+            desc: {
+                ar: "بدء البوت",
+                en: "Start the bot",
+                tr: "Botu baslat",
+                fr: "Demarrer le bot",
+                es: "Iniciar el bot",
+            },
+        },
+        {
+            command: "menu",
+            desc: {
+                ar: "القائمة الرئيسية",
+                en: "Main menu",
+                tr: "Ana menu",
+                fr: "Menu principal",
+                es: "Menu principal",
+            },
+        },
+        {
+            command: "settings",
+            desc: {
+                ar: "الإعدادات",
+                en: "Settings",
+                tr: "Ayarlar",
+                fr: "Parametres",
+                es: "Ajustes",
+            },
+        },
+        {
+            command: "help",
+            desc: {
+                ar: "المساعدة",
+                en: "Help",
+                tr: "Yardim",
+                fr: "Aide",
+                es: "Ayuda",
+            },
+        },
+        {
+            command: "about",
+            desc: {
+                ar: "عن البوت",
+                en: "About",
+                tr: "Hakkinda",
+                fr: "A propos",
+                es: "Acerca de",
+            },
+        },
+        {
+            command: "lang",
+            desc: {
+                ar: "تغيير اللغة",
+                en: "Change language",
+                tr: "Dil degistir",
+                fr: "Changer la langue",
+                es: "Cambiar idioma",
+            },
+        },
+        {
+            command: "platforms",
+            desc: {
+                ar: "المنصّات المدعومة",
+                en: "Supported platforms",
+                tr: "Desteklenen platformlar",
+                fr: "Plateformes prises en charge",
+                es: "Plataformas compatibles",
+            },
+        },
+        {
+            command: "stats",
+            desc: {
+                ar: "إحصائياتي",
+                en: "My stats",
+                tr: "Istatistiklerim",
+                fr: "Mes stats",
+                es: "Mis estadisticas",
+            },
+        },
+        {
+            command: "doc",
+            desc: {
+                ar: "تبديل الرفع كملف",
+                en: "Toggle upload-as-document",
+                tr: "Dosya olarak yukle (ac/kapa)",
+                fr: "Envoyer comme document (bascule)",
+                es: "Enviar como documento (alternar)",
+            },
+        },
+        {
+            command: "spoiler",
+            desc: {
+                ar: "تبديل السبويلر",
+                en: "Toggle spoiler mode",
+                tr: "Spoiler modunu ac/kapa",
+                fr: "Basculer mode spoiler",
+                es: "Alternar modo spoiler",
+            },
+        },
+        {
+            command: "prefix",
+            desc: {
+                ar: "ضبط/مسح بادئة الاسم",
+                en: "Set/clear filename prefix",
+                tr: "Ad onekini ayarla/temizle",
+                fr: "Definir/effacer prefixe du nom",
+                es: "Definir/borrar prefijo del nombre",
+            },
+        },
+        {
+            command: "suffix",
+            desc: {
+                ar: "ضبط/مسح لاحقة الاسم",
+                en: "Set/clear filename suffix",
+                tr: "Ad sonekini ayarla/temizle",
+                fr: "Definir/effacer suffixe du nom",
+                es: "Definir/borrar sufijo del nombre",
+            },
+        },
+        {
+            command: "screenshots",
+            desc: {
+                ar: "ضبط عدد اللقطات 0|3|5|10",
+                en: "Set screenshots count 0|3|5|10",
+                tr: "Ekran goruntulu sayisi 0|3|5|10",
+                fr: "Nombre de captures 0|3|5|10",
+                es: "Numero de capturas 0|3|5|10",
+            },
+        },
+        {
+            command: "thumb",
+            desc: {
+                ar: "ضبط الصورة المصغّرة",
+                en: "Set custom thumbnail",
+                tr: "Kucuk resim ayarla",
+                fr: "Definir la miniature",
+                es: "Definir miniatura",
+            },
+        },
+        {
+            command: "thumb_clear",
+            desc: {
+                ar: "حذف الصورة المصغّرة",
+                en: "Delete custom thumbnail",
+                tr: "Kucuk resmi sil",
+                fr: "Supprimer la miniature",
+                es: "Eliminar miniatura",
+            },
+        },
+        {
+            command: "reset",
+            desc: {
+                ar: "استرجاع الإعدادات الافتراضية",
+                en: "Restore default settings",
+                tr: "Varsayilan ayarlara don",
+                fr: "Reinitialiser les reglages",
+                es: "Restaurar ajustes por defecto",
+            },
+        },
+        {
+            command: "id",
+            desc: {
+                ar: "عرض المعرّفات",
+                en: "Show chat/user IDs",
+                tr: "Chat/kullanici kimlikleri",
+                fr: "Afficher les identifiants",
+                es: "Mostrar identificadores",
+            },
+        },
+        {
+            command: "ping",
+            desc: {
+                ar: "فحص اتصال البوت",
+                en: "Health check",
+                tr: "Baglanti kontrolu",
+                fr: "Verification rapide",
+                es: "Verificacion rapida",
+            },
+        },
+        {
+            command: "cancel",
+            desc: {
+                ar: "إلغاء الإدخال الحالي",
+                en: "Cancel current input",
+                tr: "Mevcut girisi iptal et",
+                fr: "Annuler la saisie",
+                es: "Cancelar entrada",
+            },
+        },
+    ];
+    const perLang = {} as Record<Lang, Array<{ command: string; description: string }>>;
+    for (const l of SUPPORTED_LANGS) {
+        perLang[l] = cmds.map((c) => ({
+            command: c.command,
+            description: c.desc[l],
+        }));
+    }
     try {
         // Default set (shown when Telegram has no localisation match).
         await bot.api.setMyCommands(perLang.en);
