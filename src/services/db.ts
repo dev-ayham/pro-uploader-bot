@@ -31,20 +31,29 @@ const DEFAULTS: Omit<UserPrefs, "chatId"> = {
     screenshotsCount: 0,
 };
 
-function resolveDbPath(): string {
-    const explicit = process.env.DB_PATH;
-    if (explicit && explicit.trim()) return explicit;
-    // Railway volumes are conventionally mounted at /data. If that directory
-    // exists and is writable we use it; otherwise fall back to a local path.
+/**
+ * Writable root directory for persistent state. On Railway we use the
+ * `/data` volume mount so state survives redeploys; locally we fall back
+ * to `./data/`. Everything persistent (SQLite file, per-user thumbnails,
+ * etc.) should live under this directory so operators only have to back
+ * up one thing.
+ */
+export function resolveDataDir(): string {
     const railwayVolume = "/data";
     try {
         fs.accessSync(railwayVolume, fs.constants.W_OK);
-        return path.join(railwayVolume, "pro-uploader.db");
+        return railwayVolume;
     } catch {
         const local = path.join(process.cwd(), "data");
         fs.mkdirSync(local, { recursive: true });
-        return path.join(local, "pro-uploader.db");
+        return local;
     }
+}
+
+function resolveDbPath(): string {
+    const explicit = process.env.DB_PATH;
+    if (explicit && explicit.trim()) return explicit;
+    return path.join(resolveDataDir(), "pro-uploader.db");
 }
 
 let db: Database.Database | undefined;
