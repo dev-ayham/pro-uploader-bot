@@ -16,6 +16,10 @@ export class MTProtoUploader {
         this.readyPromise = this.client
             .start({ botAuthToken: botToken })
             .then(() => undefined);
+        // Attach a no-op catch so an early failure (bad token, network) does
+        // not crash the process via Node's unhandled-rejection handler before
+        // any caller has a chance to await and handle the error.
+        this.readyPromise.catch(() => {});
     }
 
     async ready(): Promise<void> {
