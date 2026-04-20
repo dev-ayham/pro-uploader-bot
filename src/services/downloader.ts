@@ -4,6 +4,21 @@ import * as fs from "fs";
 import * as path from "path";
 
 /**
+ * Number of parallel HTTP connections yt-dlp uses per download, passed to
+ * both `--concurrent-fragments` (for HLS/DASH fragmented streams) and
+ * `-N` (for multi-range byte-stream downloads). Higher values typically
+ * deliver a 3-8x speedup on YouTube/IG/TikTok fragmented MP4s, but raise
+ * peak memory and can trip rate-limits on pickier CDNs — 8 is a good
+ * balance on Railway. Override with the `YT_DLP_CONCURRENT_FRAGMENTS`
+ * env var on busier hosts.
+ */
+const YT_DLP_CONCURRENT_FRAGMENTS = (() => {
+    const raw = process.env.YT_DLP_CONCURRENT_FRAGMENTS;
+    const n = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 8;
+})();
+
+/**
  * Hostnames that should always be downloaded via yt-dlp rather than a plain
  * HTTP GET. yt-dlp's generic extractor could technically handle anything, but
  * we keep the plain-HTTP path for direct file URLs because it is faster and
@@ -307,14 +322,18 @@ export async function downloadWithYtDlp(
         outputTemplate,
         "--print",
         "after_move:filepath",
-        // Small polite delay between retries to avoid triggering Instagram /
-        // TikTok rate-limits when the same IP hits them repeatedly.
         "--retries",
         "10",
         "--fragment-retries",
         "10",
-        "--sleep-requests",
-        "1",
+        // Parallelism: pull HLS/DASH fragments concurrently and open
+        // multiple connections to the CDN. On anything that streams as
+        // fragmented MP4 (YouTube, IG Reels, TikTok) this is typically
+        // a 3-8x speedup versus the single-connection default.
+        "--concurrent-fragments",
+        `${YT_DLP_CONCURRENT_FRAGMENTS}`,
+        "-N",
+        `${YT_DLP_CONCURRENT_FRAGMENTS}`,
     ];
 
     if (options.maxFileSizeMb && options.maxFileSizeMb > 0) {
@@ -449,8 +468,10 @@ export async function downloadAudioWithYtDlp(
         "10",
         "--fragment-retries",
         "10",
-        "--sleep-requests",
-        "1",
+        "--concurrent-fragments",
+        `${YT_DLP_CONCURRENT_FRAGMENTS}`,
+        "-N",
+        `${YT_DLP_CONCURRENT_FRAGMENTS}`,
     ];
 
     if (options.maxFileSizeMb && options.maxFileSizeMb > 0) {
