@@ -136,65 +136,87 @@ bot.on("message:text", async (ctx) => {
     }
     recentUrls.set(ctx.chat.id, { url, at: Date.now() });
 
+    // Claim the in-flight slot before any awaits that could reject and
+    // release it in a finally that covers *every* code path below, including
+    // the initial ctx.reply. If we only wrapped the upload part, a failed
+    // "processing..." reply (network blip, user blocked bot, flood wait)
+    // would leak the chat id into inFlightChats forever and every future
+    // upload from that user would hit the "already in flight" guard.
     inFlightChats.add(ctx.chat.id);
-    const initialText = shouldUseYtDlp(url)
-        ? strings.ar.extracting
-        : strings.ar.processing;
-    const statusMsg = await ctx.reply(initialText);
-
-    const editStatus = async (text: string, parseMode?: "HTML") => {
-        try {
-            await bot.api.editMessageText(
-                ctx.chat.id,
-                statusMsg.message_id,
-                text,
-                parseMode ? { parse_mode: parseMode } : undefined,
-            );
-        } catch {
-            // Ignore rate-limit / no-change errors
-        }
-    };
-
-    let lastBucket: { phase: string; bucket: number } = {
-        phase: "",
-        bucket: -1,
-    };
     try {
-        await uploader.uploadFromUrl(
-            ctx.chat.id,
-            url,
-            `<b>📄 الملف المرفوع:</b>\n<code>${url}</code>`,
-            async (progress: UploadProgress) => {
-                // Report at each 20% bucket per phase (0, 20, 40, 60, 80).
-                const bucket = Math.min(4, Math.floor(progress.fraction * 5));
-                if (
-                    progress.phase === lastBucket.phase &&
-                    bucket === lastBucket.bucket
-                ) {
-                    return;
-                }
-                lastBucket = { phase: progress.phase, bucket };
-                const text =
-                    progress.phase === "download"
-                        ? strings.ar.downloading(progress.fraction)
-                        : strings.ar.uploading(progress.fraction);
-                await editStatus(text);
-            },
-        );
+        const initialText = shouldUseYtDlp(url)
+            ? strings.ar.extracting
+            : strings.ar.processing;
 
-        await editStatus(strings.ar.success);
-    } catch (error) {
-        console.error("Upload failed:", error);
-        const detail =
-            error instanceof Error ? error.message.slice(0, 300) : String(error);
-        const escaped = detail
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
-        await editStatus(
-            `${strings.ar.error}\n\n<code>${escaped}</code>`,
-            "HTML",
-        );
+        // If even the first status reply fails we still want the bot to
+        // recover gracefully, so catch the inner failure and just log.
+        let statusMsg: { message_id: number } | undefined;
+        try {
+            statusMsg = await ctx.reply(initialText);
+        } catch (err) {
+            console.error("Failed to send initial status message:", err);
+        }
+
+        const editStatus = async (text: string, parseMode?: "HTML") => {
+            if (!statusMsg) return;
+            try {
+                await bot.api.editMessageText(
+                    ctx.chat.id,
+                    statusMsg.message_id,
+                    text,
+                    parseMode ? { parse_mode: parseMode } : undefined,
+                );
+            } catch {
+                // Ignore rate-limit / no-change errors
+            }
+        };
+
+        let lastBucket: { phase: string; bucket: number } = {
+            phase: "",
+            bucket: -1,
+        };
+        try {
+            await uploader.uploadFromUrl(
+                ctx.chat.id,
+                url,
+                `<b>📄 الملف المرفوع:</b>\n<code>${url}</code>`,
+                async (progress: UploadProgress) => {
+                    // Report at each 20% bucket per phase (0, 20, 40, 60, 80).
+                    const bucket = Math.min(
+                        4,
+                        Math.floor(progress.fraction * 5),
+                    );
+                    if (
+                        progress.phase === lastBucket.phase &&
+                        bucket === lastBucket.bucket
+                    ) {
+                        return;
+                    }
+                    lastBucket = { phase: progress.phase, bucket };
+                    const text =
+                        progress.phase === "download"
+                            ? strings.ar.downloading(progress.fraction)
+                            : strings.ar.uploading(progress.fraction);
+                    await editStatus(text);
+                },
+            );
+
+            await editStatus(strings.ar.success);
+        } catch (error) {
+            console.error("Upload failed:", error);
+            const detail =
+                error instanceof Error
+                    ? error.message.slice(0, 300)
+                    : String(error);
+            const escaped = detail
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;");
+            await editStatus(
+                `${strings.ar.error}\n\n<code>${escaped}</code>`,
+                "HTML",
+            );
+        }
     } finally {
         inFlightChats.delete(ctx.chat.id);
     }
