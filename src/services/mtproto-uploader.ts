@@ -3,14 +3,17 @@ import { StringSession } from "telegram/sessions";
 import { CustomFile } from "telegram/client/uploads";
 import { HTMLParser } from "telegram/extensions/html";
 import { generateRandomLong } from "telegram/Helpers";
+import axios from "axios";
 import * as fs from "fs";
 import * as path from "path";
 import * as mime from "mime-types";
 import {
     DownloadResult,
+    FileTooLargeError,
     downloadAudioWithYtDlp,
     downloadDirect,
     downloadWithYtDlp,
+    isDirectFileUrl,
     shouldUseYtDlp,
     YtDlpOptions,
 } from "./downloader";
@@ -283,6 +286,41 @@ export class MTProtoUploader {
     ): Promise<void> {
         await this.readyPromise;
 
+        // Zero-egress fast path: for simple direct-file URLs (e.g. an .mp4
+        // on a public CDN) with no options that need local file access
+        // (custom thumbnail, post-upload screenshots, rename, spoiler),
+        // hand the URL to Telegram via InputMediaDocumentExternal and let
+        // Telegram's own datacenters fetch the bytes. The file never
+        // touches our host, which keeps egress at $0 on any provider —
+        // a huge win at the 5 TB/month scale where Railway egress alone
+        // would cost ~$500. Falls through to the legacy download+upload
+        // path on any failure (unreachable URL, unsupported mime,
+        // Telegram WEBPAGE_MEDIA_EMPTY, etc.).
+        const canUseExternal =
+            !shouldUseYtDlp(url) &&
+            isDirectFileUrl(url) &&
+            !options.spoiler &&
+            !options.thumbnailPath &&
+            !options.postUpload &&
+            !options.renamePrefix &&
+            !options.renameSuffix;
+        if (canUseExternal) {
+            onProgress?.({ phase: "upload", fraction: 0 });
+            const sent = await this.sendByExternalUrl(
+                chatId,
+                url,
+                caption,
+                options,
+                this.ytDlpOptions.maxFileSizeMb,
+            );
+            if (sent) {
+                onProgress?.({ phase: "upload", fraction: 1 });
+                return;
+            }
+            // External fetch failed — fall through to download+upload so
+            // the user still gets their file.
+        }
+
         // `downloaded` is set as soon as the download call returns *or* throws
         // partway through having written to /tmp. Keep it out of the try so
         // we can still clean up in the finally even if download itself fails.
@@ -449,6 +487,78 @@ export class MTProtoUploader {
                     // best-effort cleanup
                 }
             }
+        }
+    }
+
+    /**
+     * Attempt to deliver a direct HTTP(S) file URL via Telegram's
+     * `InputMediaDocumentExternal` — the file is fetched server-side by
+     * Telegram from the source CDN, so our host's outbound bandwidth
+     * stays at zero.
+     *
+     * Returns `true` on success, `false` on any failure (unreachable
+     * URL, Telegram rejecting the CDN, unsupported mime, size >
+     * Telegram's 2 GB external-media cap, ...). Callers treat `false`
+     * as a signal to fall back to the legacy download+upload path so
+     * the user still gets their file.
+     *
+     * A pre-flight HEAD request enforces our own `MAX_FILE_SIZE_MB` cap
+     * — without it, Telegram would happily pull a 10 GB file through
+     * its CDN on the user's behalf, bypassing the per-upload limit we
+     * advertise in `/admin`.
+     */
+    private async sendByExternalUrl(
+        chatId: number | string,
+        url: string,
+        caption: string,
+        options: UploadOptions,
+        maxFileSizeMb?: number,
+    ): Promise<boolean> {
+        if (maxFileSizeMb && maxFileSizeMb > 0) {
+            try {
+                const head = await axios.head(url, {
+                    maxRedirects: 5,
+                    timeout: 10_000,
+                    // Never throw on non-2xx — some CDNs reject HEAD;
+                    // treat that as "size unknown" and let Telegram try.
+                    validateStatus: () => true,
+                });
+                const len = Number(head.headers["content-length"]);
+                if (
+                    Number.isFinite(len) &&
+                    len > maxFileSizeMb * 1024 * 1024
+                ) {
+                    throw new FileTooLargeError(maxFileSizeMb, len);
+                }
+            } catch (err) {
+                // Pre-flight size failure is fatal to the upload — the
+                // caller translates FileTooLargeError into a friendly
+                // `file_too_large` message.
+                if (err instanceof FileTooLargeError) throw err;
+                // Any other HEAD failure (DNS, timeout, 405 Method Not
+                // Allowed) just means "size unknown" — let Telegram try
+                // and rely on its own 2 GB cap.
+            }
+        }
+        try {
+            await this.client.sendFile(chatId, {
+                file: url,
+                caption,
+                parseMode: "html",
+                forceDocument: options.asDocument === true,
+            });
+            return true;
+        } catch (err) {
+            // Log enough detail that we can tell whether Telegram is
+            // rejecting the CDN (WEBPAGE_CURL_FAILED / WEBPAGE_MEDIA_EMPTY),
+            // the file is too big (FILE_PART_*_MISSING), or something
+            // unrelated happened. The caller will retry via download+upload.
+            console.warn(
+                `[external-url] Telegram rejected direct fetch for ${url}: ${
+                    err instanceof Error ? err.message : String(err)
+                } — falling back to local download`,
+            );
+            return false;
         }
     }
 
