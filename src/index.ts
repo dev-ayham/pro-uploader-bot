@@ -7,7 +7,10 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { MTProtoUploader, UploadProgress } from "./services/mtproto-uploader";
 import { shouldUseYtDlp, YtDlpOptions } from "./services/downloader";
-import { registerSettingsHandlers } from "./handlers/settings";
+import {
+    handlePendingInputIfAny,
+    registerSettingsHandlers,
+} from "./handlers/settings";
 import { closeDb, getUserPrefs } from "./services/db";
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
@@ -109,6 +112,13 @@ bot.command("start", (ctx) => ctx.reply(strings.ar.welcome));
 registerSettingsHandlers(bot);
 
 bot.on("message:text", async (ctx) => {
+    // If the user is mid-flow inside a /settings prompt (typing a rename
+    // prefix / suffix), consume this message as the answer and don't try to
+    // parse it as a URL.
+    if (await handlePendingInputIfAny(ctx)) {
+        return;
+    }
+
     const text = ctx.message.text;
     const urlPattern = /https?:\/\/[^\s]+/;
     const match = text.match(urlPattern);
@@ -213,6 +223,8 @@ bot.on("message:text", async (ctx) => {
                 {
                     asDocument: prefs.uploadAsDocument,
                     spoiler: prefs.spoiler,
+                    renamePrefix: prefs.renamePrefix,
+                    renameSuffix: prefs.renameSuffix,
                 },
             );
 

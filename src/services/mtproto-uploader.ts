@@ -25,6 +25,29 @@ export interface UploadOptions {
     asDocument?: boolean;
     /** Send the media with Telegram's spoiler ("click to reveal") overlay. */
     spoiler?: boolean;
+    /** String to prepend to the visible filename before the extension. */
+    renamePrefix?: string;
+    /** String to append to the visible filename before the extension. */
+    renameSuffix?: string;
+}
+
+/**
+ * Apply optional prefix/suffix around the base name, keeping the extension
+ * intact. `"my video.mp4"` with prefix `"[PRO] "` and suffix `" (final)"`
+ * becomes `"[PRO] my video (final).mp4"`. Passes the original through when
+ * both strings are empty.
+ */
+export function applyRename(
+    original: string,
+    prefix?: string,
+    suffix?: string,
+): string {
+    if (!prefix && !suffix) return original;
+    const dot = original.lastIndexOf(".");
+    const hasExt = dot > 0 && dot < original.length - 1;
+    const base = hasExt ? original.slice(0, dot) : original;
+    const ext = hasExt ? original.slice(dot) : "";
+    return `${prefix ?? ""}${base}${suffix ?? ""}${ext}`;
 }
 
 export class MTProtoUploader {
@@ -88,8 +111,16 @@ export class MTProtoUploader {
             }
 
             const stats = fs.statSync(downloaded.filePath);
-            const toUpload = new CustomFile(
+            // Apply the user's rename prefix/suffix to the *visible* filename
+            // only. We never rename the file on disk — it's deleted in the
+            // finally a few lines down.
+            const visibleName = applyRename(
                 downloaded.filename,
+                options.renamePrefix,
+                options.renameSuffix,
+            );
+            const toUpload = new CustomFile(
+                visibleName,
                 stats.size,
                 downloaded.filePath,
             );
@@ -102,7 +133,7 @@ export class MTProtoUploader {
                 await this.sendWithSpoiler(
                     chatId,
                     toUpload,
-                    downloaded.filename,
+                    visibleName,
                     caption,
                     options.asDocument === true,
                     onProgress,
