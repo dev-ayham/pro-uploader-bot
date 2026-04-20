@@ -81,11 +81,24 @@ export async function downloadDirect(
     const writer = fs.createWriteStream(filePath);
     response.data.pipe(writer);
 
-    await new Promise<void>((resolve, reject) => {
-        writer.on("finish", () => resolve());
-        writer.on("error", reject);
-        response.data.on("error", reject);
-    });
+    try {
+        await new Promise<void>((resolve, reject) => {
+            writer.on("finish", () => resolve());
+            writer.on("error", reject);
+            response.data.on("error", reject);
+        });
+    } catch (err) {
+        // Clean up the partial file before propagating the error so the
+        // caller does not have to know we ever created one.
+        try {
+            writer.destroy();
+            response.data.destroy?.();
+            fs.unlinkSync(filePath);
+        } catch {
+            // best-effort cleanup
+        }
+        throw err;
+    }
 
     return { filePath, filename };
 }
@@ -154,10 +167,32 @@ export async function downloadWithYtDlp(
             }
         });
 
-        proc.on("error", reject);
+        // Best-effort cleanup of any partial files yt-dlp may have written
+        // under our unique prefix when the process fails.
+        const cleanupPartials = () => {
+            try {
+                for (const entry of fs.readdirSync(destDir)) {
+                    if (entry.startsWith(`${prefix}_`)) {
+                        try {
+                            fs.unlinkSync(path.join(destDir, entry));
+                        } catch {
+                            // ignore
+                        }
+                    }
+                }
+            } catch {
+                // ignore
+            }
+        };
+
+        proc.on("error", (err) => {
+            cleanupPartials();
+            reject(err);
+        });
 
         proc.on("close", (code) => {
             if (code !== 0) {
+                cleanupPartials();
                 reject(
                     new Error(
                         `yt-dlp exited with code ${code}: ${stderr.trim() || stdout.trim()}`,

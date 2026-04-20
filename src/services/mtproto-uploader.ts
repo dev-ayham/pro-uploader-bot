@@ -45,20 +45,28 @@ export class MTProtoUploader {
     ): Promise<void> {
         await this.readyPromise;
 
-        let downloaded: DownloadResult;
-        if (shouldUseYtDlp(url)) {
-            downloaded = await downloadWithYtDlp(url, TEMP_DIR, (fraction) => {
-                onProgress?.({ phase: "download", fraction });
-            });
-        } else {
-            // Plain direct URL (.mp4, .pdf, ...). yt-dlp's generic extractor
-            // could also handle this but `axios` stream is faster and avoids
-            // the subprocess overhead for the common case.
-            downloaded = await downloadDirect(url, TEMP_DIR);
-            onProgress?.({ phase: "download", fraction: 1 });
-        }
-
+        // `downloaded` is set as soon as the download call returns *or* throws
+        // partway through having written to /tmp. Keep it out of the try so
+        // we can still clean up in the finally even if download itself fails.
+        let downloaded: DownloadResult | undefined;
         try {
+            if (shouldUseYtDlp(url)) {
+                downloaded = await downloadWithYtDlp(
+                    url,
+                    TEMP_DIR,
+                    (fraction) => {
+                        onProgress?.({ phase: "download", fraction });
+                    },
+                );
+            } else {
+                // Plain direct URL (.mp4, .pdf, ...). yt-dlp's generic
+                // extractor could also handle this but `axios` stream is
+                // faster and avoids the subprocess overhead for the common
+                // case.
+                downloaded = await downloadDirect(url, TEMP_DIR);
+                onProgress?.({ phase: "download", fraction: 1 });
+            }
+
             const stats = fs.statSync(downloaded.filePath);
             const toUpload = new CustomFile(
                 downloaded.filename,
@@ -76,10 +84,12 @@ export class MTProtoUploader {
                 },
             });
         } finally {
-            try {
-                fs.unlinkSync(downloaded.filePath);
-            } catch {
-                // best-effort cleanup
+            if (downloaded) {
+                try {
+                    fs.unlinkSync(downloaded.filePath);
+                } catch {
+                    // best-effort cleanup
+                }
             }
         }
     }

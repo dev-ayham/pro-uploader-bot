@@ -52,12 +52,13 @@ bot.on("message:text", async (ctx) => {
         : strings.ar.processing;
     const statusMsg = await ctx.reply(initialText);
 
-    const editStatus = async (text: string) => {
+    const editStatus = async (text: string, parseMode?: "HTML") => {
         try {
             await bot.api.editMessageText(
                 ctx.chat.id,
                 statusMsg.message_id,
                 text,
+                parseMode ? { parse_mode: parseMode } : undefined,
             );
         } catch {
             // Ignore rate-limit / no-change errors
@@ -96,7 +97,14 @@ bot.on("message:text", async (ctx) => {
         console.error("Upload failed:", error);
         const detail =
             error instanceof Error ? error.message.slice(0, 300) : String(error);
-        await editStatus(`${strings.ar.error}\n\n<code>${detail}</code>`);
+        const escaped = detail
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+        await editStatus(
+            `${strings.ar.error}\n\n<code>${escaped}</code>`,
+            "HTML",
+        );
     }
 });
 
