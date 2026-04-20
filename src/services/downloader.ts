@@ -4,13 +4,12 @@ import * as fs from "fs";
 import * as path from "path";
 
 /**
- * Number of parallel HTTP connections yt-dlp uses per download, passed to
- * both `--concurrent-fragments` (for HLS/DASH fragmented streams) and
- * `-N` (for multi-range byte-stream downloads). Higher values typically
- * deliver a 3-8x speedup on YouTube/IG/TikTok fragmented MP4s, but raise
- * peak memory and can trip rate-limits on pickier CDNs — 8 is a good
- * balance on Railway. Override with the `YT_DLP_CONCURRENT_FRAGMENTS`
- * env var on busier hosts.
+ * Number of HLS/DASH fragments yt-dlp fetches in parallel per download,
+ * passed as `--concurrent-fragments`. Higher values typically deliver a
+ * 3-8x speedup on YouTube/IG/TikTok fragmented MP4s, but raise peak
+ * memory and can trip rate-limits on pickier CDNs — 8 is a good balance
+ * on Railway. Override with the `YT_DLP_CONCURRENT_FRAGMENTS` env var on
+ * busier hosts.
  */
 const YT_DLP_CONCURRENT_FRAGMENTS = (() => {
     const raw = process.env.YT_DLP_CONCURRENT_FRAGMENTS;
@@ -200,16 +199,20 @@ export async function downloadDirect(
     response.data.pipe(writer);
 
     // Streaming guard: abort mid-download if the body exceeds the limit
-    // despite a missing / lying Content-Length header.
+    // despite a missing / lying Content-Length header. We must pass an
+    // Error into .destroy() — a bare .destroy() only emits 'close', not
+    // 'error', so the Promise below (which awaits 'finish' or 'error')
+    // would otherwise hang forever and leak the chat's concurrency slot.
     let received = 0;
     let sizeExceeded = false;
+    const sizeLimitError = new Error("__file_too_large__");
     if (limitBytes > 0) {
         response.data.on("data", (chunk: Buffer) => {
             received += chunk.length;
             if (received > limitBytes) {
                 sizeExceeded = true;
-                response.data.destroy?.();
-                writer.destroy();
+                response.data.destroy?.(sizeLimitError);
+                writer.destroy(sizeLimitError);
             }
         });
     }
@@ -326,13 +329,10 @@ export async function downloadWithYtDlp(
         "10",
         "--fragment-retries",
         "10",
-        // Parallelism: pull HLS/DASH fragments concurrently and open
-        // multiple connections to the CDN. On anything that streams as
-        // fragmented MP4 (YouTube, IG Reels, TikTok) this is typically
-        // a 3-8x speedup versus the single-connection default.
+        // Parallelism: pull HLS/DASH fragments concurrently for a 3-8x
+        // speedup on fragmented MP4 (YouTube, IG Reels, TikTok) versus
+        // the single-connection default.
         "--concurrent-fragments",
-        `${YT_DLP_CONCURRENT_FRAGMENTS}`,
-        "-N",
         `${YT_DLP_CONCURRENT_FRAGMENTS}`,
     ];
 
@@ -469,8 +469,6 @@ export async function downloadAudioWithYtDlp(
         "--fragment-retries",
         "10",
         "--concurrent-fragments",
-        `${YT_DLP_CONCURRENT_FRAGMENTS}`,
-        "-N",
         `${YT_DLP_CONCURRENT_FRAGMENTS}`,
     ];
 
