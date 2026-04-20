@@ -137,6 +137,47 @@ async function withStallGuard<T>(
     }
 }
 
+/**
+ * Give up on `messages.sendMedia(InputMediaDocumentExternal)` after this
+ * long. Telegram's DC tries to fetch the URL server-side before replying;
+ * for unreachable CDNs (FASELHD edge nodes, private storage, expired
+ * links) that can take 5–10 minutes to surface a `WEBPAGE_CURL_FAILED`,
+ * during which the user's chat is frozen and the global concurrency slot
+ * is held. 20 s is comfortably longer than a healthy Telegram fetch
+ * (which typically completes in under a second) but short enough that a
+ * bad CDN falls through to the legacy download+upload path almost
+ * immediately.
+ */
+const EXTERNAL_URL_TIMEOUT_MS = (() => {
+    const raw = process.env.EXTERNAL_URL_TIMEOUT_MS;
+    const n = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 20_000;
+})();
+
+/**
+ * Race `promise` against a timer and reject with `Error(label)` if the
+ * timer fires first. The underlying work keeps running (GramJS does not
+ * expose cancellation on `sendFile`) — any eventual rejection is caught
+ * by the attached handler to avoid unhandled-rejection noise.
+ */
+function raceWithTimeout<T>(
+    promise: Promise<T>,
+    ms: number,
+    label: string,
+): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(label)), ms);
+    });
+    // Swallow late rejections from the abandoned work so Node doesn't
+    // crash with UnhandledPromiseRejection once we've already fallen
+    // back to the slow path.
+    promise.catch(() => {});
+    return Promise.race([promise, timeout]).finally(() => {
+        if (timer) clearTimeout(timer);
+    });
+}
+
 export interface UploadProgress {
     phase: "download" | "upload";
     fraction: number;
@@ -540,19 +581,33 @@ export class MTProtoUploader {
                 // and rely on its own 2 GB cap.
             }
         }
+        // Race the sendFile against a hard timeout. When Telegram cannot
+        // reach the source CDN (e.g. FASELHD edge nodes that block
+        // non-browser UAs), `messages.sendMedia(InputMediaDocumentExternal)`
+        // can hang for ~10 minutes before the DC finally replies with
+        // WEBPAGE_CURL_FAILED. During that window the chat's upload slot
+        // is held and the user sees total silence. We instead give up
+        // after `EXTERNAL_URL_TIMEOUT_MS` (default 20 s) and fall through
+        // to the local download+upload path, so slow CDNs degrade
+        // gracefully instead of looking like a dead bot.
         try {
-            await this.client.sendFile(chatId, {
-                file: url,
-                caption,
-                parseMode: "html",
-                forceDocument: options.asDocument === true,
-            });
+            await raceWithTimeout(
+                this.client.sendFile(chatId, {
+                    file: url,
+                    caption,
+                    parseMode: "html",
+                    forceDocument: options.asDocument === true,
+                }),
+                EXTERNAL_URL_TIMEOUT_MS,
+                "external-url timeout",
+            );
             return true;
         } catch (err) {
             // Log enough detail that we can tell whether Telegram is
             // rejecting the CDN (WEBPAGE_CURL_FAILED / WEBPAGE_MEDIA_EMPTY),
-            // the file is too big (FILE_PART_*_MISSING), or something
-            // unrelated happened. The caller will retry via download+upload.
+            // the file is too big (FILE_PART_*_MISSING), our own timeout
+            // fired, or something unrelated happened. The caller will
+            // retry via download+upload.
             console.warn(
                 `[external-url] Telegram rejected direct fetch for ${url}: ${
                     err instanceof Error ? err.message : String(err)
