@@ -64,14 +64,18 @@ async function pingOpenAI(apiKey: string, model: string): Promise<{
                 },
                 body: JSON.stringify({
                     model,
-                    response_format: { type: "json_object" },
+                    // No response_format here: we only care whether the
+                    // API is reachable and the key/quota are valid. When
+                    // response_format is "json_object", OpenAI requires
+                    // the literal word "json" somewhere in the messages
+                    // and otherwise rejects the call with HTTP 400, which
+                    // made /ai_status always appear broken.
                     temperature: 0,
-                    max_tokens: 8,
+                    max_tokens: 4,
                     messages: [
                         {
                             role: "system",
-                            content:
-                                'Reply ONLY with {"action":"audio"}.',
+                            content: "Reply with the single word: ok",
                         },
                         { role: "user", content: "ping" },
                     ],
