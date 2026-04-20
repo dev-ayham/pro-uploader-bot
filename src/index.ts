@@ -2,7 +2,7 @@ import "dotenv/config";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { Bot, Context, InputFile } from "grammy";
+import { Bot, Context, InlineKeyboard, InputFile } from "grammy";
 import type { InputMediaPhoto } from "grammy/types";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
@@ -255,9 +255,34 @@ bot.on("message:photo", async (ctx) => {
 
 /**
  * Upload modes driven either by the user's stored preferences (default) or
- * by an AI-parsed follow-up intent ("audio" / "document" / "video").
+ * by an AI-parsed follow-up intent ("audio" / "document" / "video") or by
+ * the quality-selection inline menu ("q1080" / "q720" / "q480" / "q360").
  */
-type UploadMode = "default" | "audio" | "document" | "video";
+type UploadMode =
+    | "default"
+    | "audio"
+    | "document"
+    | "video"
+    | "q1080"
+    | "q720"
+    | "q480"
+    | "q360";
+
+/** Resolve a quality mode to the yt-dlp height cap it implies. */
+function maxHeightForMode(mode: UploadMode): number | undefined {
+    switch (mode) {
+        case "q1080":
+            return 1080;
+        case "q720":
+            return 720;
+        case "q480":
+            return 480;
+        case "q360":
+            return 360;
+        default:
+            return undefined;
+    }
+}
 
 const AI_DAILY_LIMIT = parseInt(
     // Default lowered from 20 to 10 for a more conservative initial spend
@@ -384,6 +409,7 @@ async function runUpload(
                     onProgress,
                     {
                         asDocument,
+                        maxHeight: maxHeightForMode(mode),
                         renamePrefix: prefs.renamePrefix,
                         renameSuffix: prefs.renameSuffix,
                         thumbnailPath: hasThumbnail(chatId)
@@ -485,6 +511,144 @@ async function classifyFollowUp(
     return { action: intent.action };
 }
 
+/**
+ * In-memory map of chatId → last URL that is waiting on a quality/format
+ * selection. Cleared either when the user clicks a button, when the entry
+ * expires (5 minutes), or when a new URL replaces it.
+ *
+ * Intentionally not persisted: losing the pending selection on redeploy is
+ * harmless (the user just re-pastes the URL), and keeping this out of
+ * SQLite avoids write churn on every URL message.
+ */
+interface PendingUpload {
+    url: string;
+    at: number;
+    /** Message id of the menu message, so we can edit / delete it. */
+    menuMessageId?: number;
+}
+const pendingUploads: Map<number, PendingUpload> = new Map();
+const PENDING_TTL_MS = 5 * 60 * 1000;
+
+function getPendingUpload(chatId: number): PendingUpload | undefined {
+    const p = pendingUploads.get(chatId);
+    if (!p) return undefined;
+    if (Date.now() - p.at > PENDING_TTL_MS) {
+        pendingUploads.delete(chatId);
+        return undefined;
+    }
+    return p;
+}
+
+/**
+ * Render the quality / format inline keyboard and remember the pending URL
+ * so the subsequent callback_query knows what to download. We do NOT embed
+ * the URL in callback_data — Telegram limits that field to 64 bytes. We
+ * look it up from the pendingUploads map keyed by chat id.
+ */
+async function presentQualityMenu(ctx: Context, url: string): Promise<void> {
+    if (!ctx.chat) return;
+    const chatId = ctx.chat.id;
+    const s = t(langOf(chatId));
+
+    const kb = new InlineKeyboard()
+        .text(s.quality_btn_audio, "q:audio")
+        .text(s.quality_btn_best, "q:best")
+        .row()
+        .text(s.quality_btn_1080, "q:1080")
+        .text(s.quality_btn_720, "q:720")
+        .row()
+        .text(s.quality_btn_480, "q:480")
+        .text(s.quality_btn_360, "q:360")
+        .row()
+        .text(s.quality_btn_document, "q:doc")
+        .text(s.quality_btn_cancel, "q:cancel");
+
+    let menuMessageId: number | undefined;
+    try {
+        const sent = await ctx.reply(s.quality_menu_title, {
+            reply_markup: kb,
+        });
+        menuMessageId = sent.message_id;
+    } catch (err) {
+        console.error("Failed to send quality menu:", err);
+        // If we can't render the menu, fall back to the legacy direct upload
+        // so the user isn't left hanging.
+        await runUpload(ctx, url, "default");
+        return;
+    }
+
+    pendingUploads.set(chatId, { url, at: Date.now(), menuMessageId });
+}
+
+const QUALITY_MODE_MAP: Record<string, UploadMode> = {
+    audio: "audio",
+    best: "default",
+    "1080": "q1080",
+    "720": "q720",
+    "480": "q480",
+    "360": "q360",
+    doc: "document",
+};
+
+bot.callbackQuery(/^q:(audio|best|1080|720|480|360|doc|cancel)$/, async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) {
+        await ctx.answerCallbackQuery();
+        return;
+    }
+    const s = t(langOf(chatId));
+    const choice = ctx.match?.[1] as string | undefined;
+
+    const pending = getPendingUpload(chatId);
+    if (!pending) {
+        await ctx.answerCallbackQuery();
+        try {
+            await ctx.editMessageText(s.quality_expired);
+        } catch {
+            // ignore
+        }
+        return;
+    }
+
+    // Always acknowledge the button press promptly; the long upload that
+    // may follow should not keep Telegram's "loading" spinner active.
+    await ctx.answerCallbackQuery();
+
+    // Remove the keyboard now that a choice was made so the user can't
+    // accidentally click a second option while the first one is running.
+    try {
+        await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+    } catch {
+        // ignore
+    }
+
+    pendingUploads.delete(chatId);
+
+    if (choice === "cancel") {
+        try {
+            await ctx.editMessageText(s.quality_cancelled);
+        } catch {
+            // ignore
+        }
+        return;
+    }
+
+    const mode = choice ? QUALITY_MODE_MAP[choice] : undefined;
+    if (!mode) return;
+
+    // Delete the now-stale menu message so the chat timeline shows the
+    // upload progress message directly. Failure is non-fatal.
+    if (pending.menuMessageId) {
+        try {
+            await ctx.api.deleteMessage(chatId, pending.menuMessageId);
+        } catch {
+            // ignore
+        }
+    }
+
+    await runUpload(ctx, pending.url, mode);
+});
+
 bot.on("message:text", async (ctx) => {
     // If the user is mid-flow inside a /settings prompt (typing a rename
     // prefix / suffix), consume this message as the answer and don't try to
@@ -540,7 +704,8 @@ bot.on("message:text", async (ctx) => {
         }
     }
 
-    // --- URL branch: regular upload.
+    // --- URL branch: present the user with an inline quality-selection
+    //     menu instead of downloading right away.
     if (!rememberProcessed(chatId, ctx.message.message_id)) {
         console.warn(
             `Skipping duplicate delivery of message ${ctx.message.message_id} in chat ${chatId}`,
@@ -555,7 +720,15 @@ bot.on("message:text", async (ctx) => {
         return;
     }
     recentUrls.set(chatId, { url, at: Date.now() });
-    await runUpload(ctx, url, "default");
+
+    // Direct-download URLs (.mp4, .pdf, …) have no per-quality alternatives
+    // — yt-dlp is not involved. Skip the menu for those and upload directly.
+    if (!shouldUseYtDlp(url)) {
+        await runUpload(ctx, url, "default");
+        return;
+    }
+
+    await presentQualityMenu(ctx, url);
 });
 
 // Global handler-level error safety net. A throw inside a handler should
