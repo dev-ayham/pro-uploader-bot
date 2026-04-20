@@ -4,6 +4,7 @@ import { CustomFile } from "telegram/client/uploads";
 import { HTMLParser } from "telegram/extensions/html";
 import { generateRandomLong } from "telegram/Helpers";
 import * as fs from "fs";
+import * as path from "path";
 import * as mime from "mime-types";
 import {
     DownloadResult,
@@ -13,6 +14,7 @@ import {
     shouldUseYtDlp,
     YtDlpOptions,
 } from "./downloader";
+import { resolveDataDir } from "./db";
 
 const TEMP_DIR = "/tmp";
 
@@ -64,6 +66,36 @@ export function applyRename(
     return `${prefix ?? ""}${base}${suffix ?? ""}${ext}`;
 }
 
+/**
+ * Absolute path to the persisted GramJS session string. Lives on the
+ * Railway volume (`/data/mtproto.session`) alongside the SQLite file so
+ * the MTProto sign-in survives container restarts. Without persistence
+ * every redeploy issues a fresh `auth.ImportBotAuthorization` and
+ * Telegram rate-limits the bot token with a multi-minute flood-wait
+ * after a handful of consecutive sign-ins.
+ */
+function sessionFilePath(): string {
+    return path.join(resolveDataDir(), "mtproto.session");
+}
+
+function loadSessionString(): string {
+    try {
+        return fs.readFileSync(sessionFilePath(), "utf8").trim();
+    } catch {
+        return "";
+    }
+}
+
+function saveSessionString(s: string): void {
+    try {
+        const file = sessionFilePath();
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, s, { mode: 0o600 });
+    } catch (err) {
+        console.error("Failed to persist MTProto session:", err);
+    }
+}
+
 export class MTProtoUploader {
     private client: TelegramClient;
     private readyPromise: Promise<void>;
@@ -75,12 +107,40 @@ export class MTProtoUploader {
         botToken: string,
         ytDlpOptions: YtDlpOptions = {},
     ) {
-        this.client = new TelegramClient(new StringSession(""), apiId, apiHash, {
-            connectionRetries: 5,
-        });
+        // Rehydrate a previously-saved session so Railway redeploys do
+        // not trigger a fresh auth.ImportBotAuthorization each time,
+        // which Telegram throttles with a 4-5 minute flood-wait after
+        // a few consecutive sign-ins.
+        const storedSession = loadSessionString();
+        this.client = new TelegramClient(
+            new StringSession(storedSession),
+            apiId,
+            apiHash,
+            { connectionRetries: 5 },
+        );
         this.readyPromise = this.client
             .start({ botAuthToken: botToken })
-            .then(() => undefined);
+            .then(() => {
+                // Persist whatever session the client settled on. Safe to
+                // call repeatedly — the string is idempotent once signed
+                // in, so later invocations just overwrite with the same
+                // bytes.
+                try {
+                    // GramJS types .save() as void but StringSession
+                    // actually returns the serialised string — treat it
+                    // as unknown and narrow at runtime.
+                    const saved: unknown = (
+                        this.client.session as unknown as {
+                            save: () => unknown;
+                        }
+                    ).save();
+                    if (typeof saved === "string" && saved.length > 0) {
+                        saveSessionString(saved);
+                    }
+                } catch (err) {
+                    console.error("Session save after start() failed:", err);
+                }
+            });
         // Attach a no-op catch so an early failure (bad token, network) does
         // not crash the process via Node's unhandled-rejection handler before
         // any caller has a chance to await and handle the error.
