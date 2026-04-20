@@ -21,6 +21,10 @@ export interface UserPrefs {
     /** How many equidistant frames to attach as an album after a video
      * upload. 0 disables the feature. */
     screenshotsCount: number;
+    /** Number of successful uploads this chat has performed. Shown by /stats. */
+    uploadsCount: number;
+    /** First-seen unix seconds; null until first write. */
+    createdAt: number | null;
 }
 
 const DEFAULTS: Omit<UserPrefs, "chatId"> = {
@@ -30,7 +34,16 @@ const DEFAULTS: Omit<UserPrefs, "chatId"> = {
     renamePrefix: "",
     renameSuffix: "",
     screenshotsCount: 0,
+    uploadsCount: 0,
+    createdAt: null,
 };
+
+/** Mutable fields that the public API is allowed to patch. uploadsCount and
+ *  createdAt are maintained internally (by incrementUploadsCount) and are
+ *  therefore excluded from the type of the patch argument. */
+export type UserPrefsPatch = Partial<
+    Omit<UserPrefs, "chatId" | "uploadsCount" | "createdAt">
+>;
 
 /**
  * Writable root directory for persistent state. On Railway we use the
@@ -80,6 +93,7 @@ function getDb(): Database.Database {
     // install (where CREATE TABLE above already includes it) and on repos
     // that pre-dated this column.
     addColumnIfMissing(db, "user_prefs", "screenshots_count", "INTEGER NOT NULL DEFAULT 0");
+    addColumnIfMissing(db, "user_prefs", "uploads_count", "INTEGER NOT NULL DEFAULT 0");
     console.log(`SQLite preferences DB opened at ${dbPath}`);
     return db;
 }
@@ -105,6 +119,8 @@ interface Row {
     rename_prefix: string;
     rename_suffix: string;
     screenshots_count: number;
+    uploads_count: number;
+    created_at: number | null;
 }
 
 function rowToPrefs(row: Row): UserPrefs {
@@ -120,6 +136,8 @@ function rowToPrefs(row: Row): UserPrefs {
         renamePrefix: row.rename_prefix,
         renameSuffix: row.rename_suffix,
         screenshotsCount: row.screenshots_count ?? 0,
+        uploadsCount: row.uploads_count ?? 0,
+        createdAt: row.created_at ?? null,
     };
 }
 
@@ -137,7 +155,7 @@ export function getUserPrefs(chatId: number): UserPrefs {
  */
 export function updateUserPrefs(
     chatId: number,
-    patch: Partial<Omit<UserPrefs, "chatId">>,
+    patch: UserPrefsPatch,
 ): UserPrefs {
     const current = getUserPrefs(chatId);
     const next: UserPrefs = { ...current, ...patch, chatId };
@@ -168,6 +186,35 @@ export function updateUserPrefs(
             screenshotsCount: next.screenshotsCount,
         });
     return next;
+}
+
+/**
+ * Reset all toggles, rename and screenshots preferences for this chat back
+ * to DEFAULTS. We intentionally preserve `uploads_count` and `created_at`
+ * so the user's lifetime stats survive a /reset.
+ */
+export function resetUserPrefs(chatId: number): UserPrefs {
+    return updateUserPrefs(chatId, {
+        uploadAsDocument: DEFAULTS.uploadAsDocument,
+        spoiler: DEFAULTS.spoiler,
+        language: DEFAULTS.language,
+        renamePrefix: DEFAULTS.renamePrefix,
+        renameSuffix: DEFAULTS.renameSuffix,
+        screenshotsCount: DEFAULTS.screenshotsCount,
+    });
+}
+
+/** Atomic +1 on the uploads counter; called after a successful upload. */
+export function incrementUploadsCount(chatId: number): void {
+    getDb()
+        .prepare(
+            `INSERT INTO user_prefs (chat_id, uploads_count, updated_at)
+             VALUES (?, 1, strftime('%s','now'))
+             ON CONFLICT(chat_id) DO UPDATE SET
+                 uploads_count = uploads_count + 1,
+                 updated_at    = strftime('%s','now')`,
+        )
+        .run(chatId);
 }
 
 export function closeDb(): void {

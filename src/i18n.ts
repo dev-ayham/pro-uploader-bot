@@ -33,6 +33,8 @@ interface Strings {
     menu_close: string;
     menu_back: string;
     menu_language: string;
+    menu_platforms: string;
+    menu_stats: string;
 
     // Help
     help_title: string;
@@ -107,6 +109,28 @@ interface Strings {
     disabled: string;
     set_: string;
     not_set: string;
+
+    // Quick commands
+    cmd_doc_toggled: (on: boolean) => string;
+    cmd_spoiler_toggled: (on: boolean) => string;
+    cmd_prefix_set: (value: string) => string;
+    cmd_prefix_cleared: string;
+    cmd_prefix_current: (value: string) => string;
+    cmd_prefix_none: string;
+    cmd_suffix_set: (value: string) => string;
+    cmd_suffix_cleared: string;
+    cmd_suffix_current: (value: string) => string;
+    cmd_suffix_none: string;
+    cmd_screenshots_set: (n: number) => string;
+    cmd_screenshots_usage: string;
+    cmd_thumb_clear_done: string;
+    cmd_thumb_not_set: string;
+    cmd_reset_done: string;
+    platforms_text: string;
+    stats_text: (uploads: number, joined: string, lang: string) => string;
+    id_text: (chatId: number, userId: number) => string;
+    pong: (uptimeSec: number) => string;
+    stats_never: string;
 }
 
 const ar: Strings = {
@@ -130,6 +154,8 @@ const ar: Strings = {
     menu_close: "❌ إغلاق",
     menu_back: "🔙 رجوع",
     menu_language: "🌐 اللغة",
+    menu_platforms: "🌐 المنصّات",
+    menu_stats: "📊 إحصائياتي",
 
     help_title: "📖 <b>المساعدة</b>",
     help_commands:
@@ -216,6 +242,50 @@ const ar: Strings = {
     disabled: "⬜",
     set_: "مضبوطة",
     not_set: "—",
+
+    cmd_doc_toggled: (on) => `📤 الرفع كملف: ${on ? "مُفعّل ✅" : "مُعطّل ⬜"}`,
+    cmd_spoiler_toggled: (on) => `🫣 السبويلر: ${on ? "مُفعّل ✅" : "مُعطّل ⬜"}`,
+    cmd_prefix_set: (v) => `✏️ تم ضبط البادئة: <code>${v}</code>`,
+    cmd_prefix_cleared: "✏️ تم مسح البادئة.",
+    cmd_prefix_current: (v) => `✏️ البادئة الحالية: <code>${v}</code>
+للتغيير: <code>/prefix النص</code>
+للمسح: <code>/prefix clear</code>`,
+    cmd_prefix_none: "ℹ️ لا توجد بادئة. استخدم <code>/prefix النص</code> لضبطها.",
+    cmd_suffix_set: (v) => `✏️ تم ضبط اللاحقة: <code>${v}</code>`,
+    cmd_suffix_cleared: "✏️ تم مسح اللاحقة.",
+    cmd_suffix_current: (v) => `✏️ اللاحقة الحالية: <code>${v}</code>
+للتغيير: <code>/suffix النص</code>
+للمسح: <code>/suffix clear</code>`,
+    cmd_suffix_none: "ℹ️ لا توجد لاحقة. استخدم <code>/suffix النص</code> لضبطها.",
+    cmd_screenshots_set: (n) => `🖼️ عدد اللقطات: ${n === 0 ? "معطّل" : n}`,
+    cmd_screenshots_usage: "استخدام: <code>/screenshots 0|3|5|10</code>",
+    cmd_thumb_clear_done: "🗑️ تم حذف الصورة المصغّرة.",
+    cmd_thumb_not_set: "ℹ️ لا توجد صورة مصغّرة محفوظة.",
+    cmd_reset_done: "♻️ تم استرجاع الإعدادات الافتراضية.",
+    platforms_text:
+        "<b>🌐 المنصّات المدعومة</b>\n\n" +
+        "• روابط مباشرة (mp4 / mkv / pdf / zip / …)\n" +
+        "• Instagram (Reels / Posts / Stories)\n" +
+        "• YouTube + YouTube Shorts\n" +
+        "• TikTok\n" +
+        "• Twitter / X\n" +
+        "• Facebook\n" +
+        "• Reddit\n" +
+        "• Vimeo\n" +
+        "• Twitch\n" +
+        "• SoundCloud\n\n" +
+        "<i>حد أقصى للرفع: 2GB عبر MTProto</i>",
+    stats_text: (uploads, joined, lang) =>
+        "<b>📊 إحصائياتك</b>\n\n" +
+        `• عدد الرفعات الناجحة: <b>${uploads}</b>\n` +
+        `• اللغة: <b>${lang}</b>\n` +
+        `• انضممت: ${joined}`,
+    id_text: (chatId, userId) =>
+        `🆔 <b>المعرّفات</b>\n\n` +
+        `• Chat ID: <code>${chatId}</code>\n` +
+        `• User ID: <code>${userId}</code>`,
+    pong: (u) => `🏓 pong — يعمل منذ ${formatUptime(u, "ar")}`,
+    stats_never: "—",
 };
 
 const en: Strings = {
@@ -239,6 +309,8 @@ const en: Strings = {
     menu_close: "❌ Close",
     menu_back: "🔙 Back",
     menu_language: "🌐 Language",
+    menu_platforms: "🌐 Platforms",
+    menu_stats: "📊 My stats",
 
     help_title: "📖 <b>Help</b>",
     help_commands:
@@ -325,6 +397,50 @@ const en: Strings = {
     disabled: "⬜",
     set_: "set",
     not_set: "—",
+
+    cmd_doc_toggled: (on) => `📤 Upload as document: ${on ? "ON ✅" : "OFF ⬜"}`,
+    cmd_spoiler_toggled: (on) => `🫣 Spoiler mode: ${on ? "ON ✅" : "OFF ⬜"}`,
+    cmd_prefix_set: (v) => `✏️ Prefix set to: <code>${v}</code>`,
+    cmd_prefix_cleared: "✏️ Prefix cleared.",
+    cmd_prefix_current: (v) => `✏️ Current prefix: <code>${v}</code>
+Change: <code>/prefix your-text</code>
+Clear: <code>/prefix clear</code>`,
+    cmd_prefix_none: "ℹ️ No prefix is set. Use <code>/prefix your-text</code> to set one.",
+    cmd_suffix_set: (v) => `✏️ Suffix set to: <code>${v}</code>`,
+    cmd_suffix_cleared: "✏️ Suffix cleared.",
+    cmd_suffix_current: (v) => `✏️ Current suffix: <code>${v}</code>
+Change: <code>/suffix your-text</code>
+Clear: <code>/suffix clear</code>`,
+    cmd_suffix_none: "ℹ️ No suffix is set. Use <code>/suffix your-text</code> to set one.",
+    cmd_screenshots_set: (n) => `🖼️ Screenshots count: ${n === 0 ? "disabled" : n}`,
+    cmd_screenshots_usage: "Usage: <code>/screenshots 0|3|5|10</code>",
+    cmd_thumb_clear_done: "🗑️ Thumbnail deleted.",
+    cmd_thumb_not_set: "ℹ️ No thumbnail is currently set.",
+    cmd_reset_done: "♻️ Settings restored to defaults.",
+    platforms_text:
+        "<b>🌐 Supported platforms</b>\n\n" +
+        "• Direct links (mp4 / mkv / pdf / zip / …)\n" +
+        "• Instagram (Reels / Posts / Stories)\n" +
+        "• YouTube + YouTube Shorts\n" +
+        "• TikTok\n" +
+        "• Twitter / X\n" +
+        "• Facebook\n" +
+        "• Reddit\n" +
+        "• Vimeo\n" +
+        "• Twitch\n" +
+        "• SoundCloud\n\n" +
+        "<i>Upload size limit: 2 GB via MTProto</i>",
+    stats_text: (uploads, joined, lang) =>
+        "<b>📊 Your stats</b>\n\n" +
+        `• Successful uploads: <b>${uploads}</b>\n` +
+        `• Language: <b>${lang}</b>\n` +
+        `• Joined: ${joined}`,
+    id_text: (chatId, userId) =>
+        `🆔 <b>Identifiers</b>\n\n` +
+        `• Chat ID: <code>${chatId}</code>\n` +
+        `• User ID: <code>${userId}</code>`,
+    pong: (u) => `🏓 pong — up for ${formatUptime(u, "en")}`,
+    stats_never: "—",
 };
 
 const tr: Strings = {
@@ -348,6 +464,8 @@ const tr: Strings = {
     menu_close: "❌ Kapat",
     menu_back: "🔙 Geri",
     menu_language: "🌐 Dil",
+    menu_platforms: "🌐 Platformlar",
+    menu_stats: "📊 İstatistiklerim",
 
     help_title: "📖 <b>Yardim</b>",
     help_commands:
@@ -434,6 +552,50 @@ const tr: Strings = {
     disabled: "⬜",
     set_: "ayarli",
     not_set: "—",
+
+    cmd_doc_toggled: (on) => `📤 Dosya olarak yükle: ${on ? "AÇIK ✅" : "KAPALI ⬜"}`,
+    cmd_spoiler_toggled: (on) => `🫣 Spoiler modu: ${on ? "AÇIK ✅" : "KAPALI ⬜"}`,
+    cmd_prefix_set: (v) => `✏️ Ön ek ayarlandı: <code>${v}</code>`,
+    cmd_prefix_cleared: "✏️ Ön ek silindi.",
+    cmd_prefix_current: (v) => `✏️ Geçerli ön ek: <code>${v}</code>
+Değiştir: <code>/prefix metniniz</code>
+Temizle: <code>/prefix clear</code>`,
+    cmd_prefix_none: "ℹ️ Ön ek ayarlanmamış. Ayarlamak için <code>/prefix metin</code>.",
+    cmd_suffix_set: (v) => `✏️ Son ek ayarlandı: <code>${v}</code>`,
+    cmd_suffix_cleared: "✏️ Son ek silindi.",
+    cmd_suffix_current: (v) => `✏️ Geçerli son ek: <code>${v}</code>
+Değiştir: <code>/suffix metniniz</code>
+Temizle: <code>/suffix clear</code>`,
+    cmd_suffix_none: "ℹ️ Son ek ayarlanmamış. Ayarlamak için <code>/suffix metin</code>.",
+    cmd_screenshots_set: (n) => `🖼️ Ekran görüntüsü sayısı: ${n === 0 ? "kapalı" : n}`,
+    cmd_screenshots_usage: "Kullanım: <code>/screenshots 0|3|5|10</code>",
+    cmd_thumb_clear_done: "🗑️ Küçük resim silindi.",
+    cmd_thumb_not_set: "ℹ️ Ayarlı küçük resim yok.",
+    cmd_reset_done: "♻️ Varsayılan ayarlar geri yüklendi.",
+    platforms_text:
+        "<b>🌐 Desteklenen platformlar</b>\n\n" +
+        "• Doğrudan bağlantılar (mp4 / mkv / pdf / zip / …)\n" +
+        "• Instagram (Reels / Posts / Stories)\n" +
+        "• YouTube + YouTube Shorts\n" +
+        "• TikTok\n" +
+        "• Twitter / X\n" +
+        "• Facebook\n" +
+        "• Reddit\n" +
+        "• Vimeo\n" +
+        "• Twitch\n" +
+        "• SoundCloud\n\n" +
+        "<i>Yükleme sınırı: MTProto ile 2 GB</i>",
+    stats_text: (uploads, joined, lang) =>
+        "<b>📊 İstatistikleriniz</b>\n\n" +
+        `• Başarılı yüklemeler: <b>${uploads}</b>\n` +
+        `• Dil: <b>${lang}</b>\n` +
+        `• Katıldınız: ${joined}`,
+    id_text: (chatId, userId) =>
+        `🆔 <b>Kimlikler</b>\n\n` +
+        `• Chat ID: <code>${chatId}</code>\n` +
+        `• User ID: <code>${userId}</code>`,
+    pong: (u) => `🏓 pong — çalışma süresi: ${formatUptime(u, "tr")}`,
+    stats_never: "—",
 };
 
 const fr: Strings = {
@@ -457,6 +619,8 @@ const fr: Strings = {
     menu_close: "❌ Fermer",
     menu_back: "🔙 Retour",
     menu_language: "🌐 Langue",
+    menu_platforms: "🌐 Plateformes",
+    menu_stats: "📊 Mes stats",
 
     help_title: "📖 <b>Aide</b>",
     help_commands:
@@ -542,6 +706,50 @@ const fr: Strings = {
     disabled: "⬜",
     set_: "definie",
     not_set: "—",
+
+    cmd_doc_toggled: (on) => `📤 Envoyer comme document: ${on ? "ACTIVÉ ✅" : "DÉSACTIVÉ ⬜"}`,
+    cmd_spoiler_toggled: (on) => `🫣 Mode spoiler: ${on ? "ACTIVÉ ✅" : "DÉSACTIVÉ ⬜"}`,
+    cmd_prefix_set: (v) => `✏️ Préfixe défini: <code>${v}</code>`,
+    cmd_prefix_cleared: "✏️ Préfixe effacé.",
+    cmd_prefix_current: (v) => `✏️ Préfixe actuel: <code>${v}</code>
+Modifier: <code>/prefix votre-texte</code>
+Effacer: <code>/prefix clear</code>`,
+    cmd_prefix_none: "ℹ️ Aucun préfixe défini. Utilisez <code>/prefix votre-texte</code>.",
+    cmd_suffix_set: (v) => `✏️ Suffixe défini: <code>${v}</code>`,
+    cmd_suffix_cleared: "✏️ Suffixe effacé.",
+    cmd_suffix_current: (v) => `✏️ Suffixe actuel: <code>${v}</code>
+Modifier: <code>/suffix votre-texte</code>
+Effacer: <code>/suffix clear</code>`,
+    cmd_suffix_none: "ℹ️ Aucun suffixe défini. Utilisez <code>/suffix votre-texte</code>.",
+    cmd_screenshots_set: (n) => `🖼️ Nombre de captures: ${n === 0 ? "désactivé" : n}`,
+    cmd_screenshots_usage: "Usage: <code>/screenshots 0|3|5|10</code>",
+    cmd_thumb_clear_done: "🗑️ Miniature supprimée.",
+    cmd_thumb_not_set: "ℹ️ Aucune miniature enregistrée.",
+    cmd_reset_done: "♻️ Paramètres réinitialisés par défaut.",
+    platforms_text:
+        "<b>🌐 Plateformes prises en charge</b>\n\n" +
+        "• Liens directs (mp4 / mkv / pdf / zip / …)\n" +
+        "• Instagram (Reels / Posts / Stories)\n" +
+        "• YouTube + YouTube Shorts\n" +
+        "• TikTok\n" +
+        "• Twitter / X\n" +
+        "• Facebook\n" +
+        "• Reddit\n" +
+        "• Vimeo\n" +
+        "• Twitch\n" +
+        "• SoundCloud\n\n" +
+        "<i>Taille max: 2 Go via MTProto</i>",
+    stats_text: (uploads, joined, lang) =>
+        "<b>📊 Vos statistiques</b>\n\n" +
+        `• Envois réussis: <b>${uploads}</b>\n` +
+        `• Langue: <b>${lang}</b>\n` +
+        `• Inscrit: ${joined}`,
+    id_text: (chatId, userId) =>
+        `🆔 <b>Identifiants</b>\n\n` +
+        `• Chat ID: <code>${chatId}</code>\n` +
+        `• User ID: <code>${userId}</code>`,
+    pong: (u) => `🏓 pong — actif depuis ${formatUptime(u, "fr")}`,
+    stats_never: "—",
 };
 
 const es: Strings = {
@@ -565,6 +773,8 @@ const es: Strings = {
     menu_close: "❌ Cerrar",
     menu_back: "🔙 Volver",
     menu_language: "🌐 Idioma",
+    menu_platforms: "🌐 Plataformas",
+    menu_stats: "📊 Mis estadísticas",
 
     help_title: "📖 <b>Ayuda</b>",
     help_commands:
@@ -650,7 +860,104 @@ const es: Strings = {
     disabled: "⬜",
     set_: "puesta",
     not_set: "—",
+
+    cmd_doc_toggled: (on) => `📤 Enviar como documento: ${on ? "ACTIVADO ✅" : "DESACTIVADO ⬜"}`,
+    cmd_spoiler_toggled: (on) => `🫣 Modo spoiler: ${on ? "ACTIVADO ✅" : "DESACTIVADO ⬜"}`,
+    cmd_prefix_set: (v) => `✏️ Prefijo establecido: <code>${v}</code>`,
+    cmd_prefix_cleared: "✏️ Prefijo borrado.",
+    cmd_prefix_current: (v) => `✏️ Prefijo actual: <code>${v}</code>
+Cambiar: <code>/prefix tu-texto</code>
+Borrar: <code>/prefix clear</code>`,
+    cmd_prefix_none: "ℹ️ No hay prefijo. Usa <code>/prefix tu-texto</code> para definirlo.",
+    cmd_suffix_set: (v) => `✏️ Sufijo establecido: <code>${v}</code>`,
+    cmd_suffix_cleared: "✏️ Sufijo borrado.",
+    cmd_suffix_current: (v) => `✏️ Sufijo actual: <code>${v}</code>
+Cambiar: <code>/suffix tu-texto</code>
+Borrar: <code>/suffix clear</code>`,
+    cmd_suffix_none: "ℹ️ No hay sufijo. Usa <code>/suffix tu-texto</code> para definirlo.",
+    cmd_screenshots_set: (n) => `🖼️ Número de capturas: ${n === 0 ? "desactivado" : n}`,
+    cmd_screenshots_usage: "Uso: <code>/screenshots 0|3|5|10</code>",
+    cmd_thumb_clear_done: "🗑️ Miniatura eliminada.",
+    cmd_thumb_not_set: "ℹ️ No hay miniatura guardada.",
+    cmd_reset_done: "♻️ Ajustes restaurados a valores por defecto.",
+    platforms_text:
+        "<b>🌐 Plataformas compatibles</b>\n\n" +
+        "• Enlaces directos (mp4 / mkv / pdf / zip / …)\n" +
+        "• Instagram (Reels / Posts / Stories)\n" +
+        "• YouTube + YouTube Shorts\n" +
+        "• TikTok\n" +
+        "• Twitter / X\n" +
+        "• Facebook\n" +
+        "• Reddit\n" +
+        "• Vimeo\n" +
+        "• Twitch\n" +
+        "• SoundCloud\n\n" +
+        "<i>Límite de subida: 2 GB vía MTProto</i>",
+    stats_text: (uploads, joined, lang) =>
+        "<b>📊 Tus estadísticas</b>\n\n" +
+        `• Subidas exitosas: <b>${uploads}</b>\n` +
+        `• Idioma: <b>${lang}</b>\n` +
+        `• Registrado: ${joined}`,
+    id_text: (chatId, userId) =>
+        `🆔 <b>Identificadores</b>\n\n` +
+        `• Chat ID: <code>${chatId}</code>\n` +
+        `• User ID: <code>${userId}</code>`,
+    pong: (u) => `🏓 pong — activo desde hace ${formatUptime(u, "es")}`,
+    stats_never: "—",
 };
+
+/**
+ * Format a process uptime expressed in seconds to a compact, localised
+ * "Xd Yh Zm" style string. Used by /ping to give the user a quick sense
+ * of how long the current container has been alive.
+ */
+function formatUptime(totalSec: number, lang: Lang): string {
+    const sec = Math.max(0, Math.floor(totalSec));
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    const LABELS: Record<Lang, { d: string; h: string; m: string; s: string }> = {
+        ar: { d: "ي", h: "س", m: "د", s: "ث" },
+        en: { d: "d", h: "h", m: "m", s: "s" },
+        tr: { d: "g", h: "s", m: "dk", s: "sn" },
+        fr: { d: "j", h: "h", m: "m", s: "s" },
+        es: { d: "d", h: "h", m: "m", s: "s" },
+    };
+    const L = LABELS[lang];
+    const parts: string[] = [];
+    if (d > 0) parts.push(`${d}${L.d}`);
+    if (h > 0) parts.push(`${h}${L.h}`);
+    if (m > 0) parts.push(`${m}${L.m}`);
+    if (parts.length === 0 || s > 0) parts.push(`${s}${L.s}`);
+    return parts.join(" ");
+}
+
+/**
+ * Format a unix timestamp (seconds) to a locale-aware short date. Used by
+ * /stats to show the "joined" date. Falls back to an ISO-ish format if
+ * Intl.DateTimeFormat is not available for the given locale.
+ */
+export function formatJoinedDate(unixSec: number | null, lang: Lang): string {
+    if (!unixSec) return "—";
+    const d = new Date(unixSec * 1000);
+    const tag: Record<Lang, string> = {
+        ar: "ar-SA",
+        en: "en-GB",
+        tr: "tr-TR",
+        fr: "fr-FR",
+        es: "es-ES",
+    };
+    try {
+        return new Intl.DateTimeFormat(tag[lang], {
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+        }).format(d);
+    } catch {
+        return d.toISOString().slice(0, 10);
+    }
+}
 
 const ALL: Record<Lang, Strings> = { ar, en, tr, fr, es };
 
