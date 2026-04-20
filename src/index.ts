@@ -554,6 +554,17 @@ async function runUpload(
                 await editStatus(s.file_too_large(limit));
                 return false;
             }
+            // The MTProto uploader's stall watchdog throws an Error whose
+            // message starts with "Upload stalled" when no progress tick
+            // has advanced for UPLOAD_STALL_TIMEOUT_MS. Surface this as a
+            // friendly, actionable message rather than a raw stack trace.
+            if (
+                error instanceof Error &&
+                /^Upload stalled/i.test(error.message)
+            ) {
+                await editStatus(s.upload_stalled);
+                return false;
+            }
             const detail =
                 error instanceof Error
                     ? error.message.slice(0, 300)

@@ -94,6 +94,7 @@ interface Strings {
     already_in_flight: string;
     queue_full: (max: number) => string;
     file_too_large: (limitMb: number) => string;
+    upload_stalled: string;
     duplicate_ignored: string;
     screenshots_caption: (n: number) => string;
     screenshots_single: string;
@@ -265,6 +266,8 @@ const ar: Strings = {
         `⏳ السيرفر مشغول الآن (${max} عمليات متزامنة). حاول بعد دقيقة.`,
     file_too_large: (mb) =>
         `❌ الملف أكبر من الحد المسموح (${mb} ميجابايت). اختر جودة أقل أو رابطاً أصغر.`,
+    upload_stalled:
+        "⚠️ الرفع توقف عن التقدّم (غالباً تحديد سرعة من تيليجرام). جرّب مرة أخرى، أو جودة أقل.",
     duplicate_ignored: "ℹ️ تم تجاهل رابط مكرر.",
     screenshots_caption: (n) => `🖼️ ${n} لقطات من الفيديو`,
     screenshots_single: "🖼️ لقطة من الفيديو",
@@ -454,6 +457,8 @@ const en: Strings = {
         `⏳ The server is busy right now (${max} concurrent uploads). Try again in a minute.`,
     file_too_large: (mb) =>
         `❌ File is larger than the allowed limit (${mb} MB). Pick a lower quality or a smaller URL.`,
+    upload_stalled:
+        "⚠️ Upload stopped making progress (likely a Telegram rate-limit). Try again, or pick a lower quality.",
     duplicate_ignored: "ℹ️ Duplicate link ignored.",
     screenshots_caption: (n) => `🖼️ ${n} screenshots from the video`,
     screenshots_single: "🖼️ Screenshot from the video",
@@ -644,6 +649,8 @@ const tr: Strings = {
         `⏳ Sunucu su an mesgul (${max} es zamanli yukleme). Bir dakika sonra tekrar deneyin.`,
     file_too_large: (mb) =>
         `❌ Dosya izin verilen sinirdan buyuk (${mb} MB). Daha dusuk kalite veya daha kucuk bir URL secin.`,
+    upload_stalled:
+        "⚠️ Yukleme ilerlemiyor (Telegram hiz siniri). Tekrar deneyin veya daha dusuk kalite secin.",
     duplicate_ignored: "ℹ️ Tekrarlanan link yok sayildi.",
     screenshots_caption: (n) => `🖼️ Videodan ${n} ekran goruntusu`,
     screenshots_single: "🖼️ Videodan ekran goruntusu",
@@ -833,6 +840,8 @@ const fr: Strings = {
         `⏳ Le serveur est occupe (${max} uploads simultanes). Reessayez dans une minute.`,
     file_too_large: (mb) =>
         `❌ Fichier plus grand que la limite (${mb} Mo). Choisissez une qualite inferieure ou une URL plus petite.`,
+    upload_stalled:
+        "⚠️ L'upload n'avance plus (probablement une limite de debit Telegram). Reessayez, ou choisissez une qualite inferieure.",
     duplicate_ignored: "ℹ️ Lien en double ignore.",
     screenshots_caption: (n) => `🖼️ ${n} captures de la video`,
     screenshots_single: "🖼️ Capture de la video",
@@ -1022,6 +1031,8 @@ const es: Strings = {
         `⏳ El servidor esta ocupado (${max} cargas simultaneas). Intenta en un minuto.`,
     file_too_large: (mb) =>
         `❌ El archivo supera el limite permitido (${mb} MB). Elige una calidad menor o una URL mas pequena.`,
+    upload_stalled:
+        "⚠️ La carga dejo de avanzar (probablemente un limite de Telegram). Reintenta, o elige una calidad menor.",
     duplicate_ignored: "ℹ️ Enlace duplicado ignorado.",
     screenshots_caption: (n) => `🖼️ ${n} capturas del video`,
     screenshots_single: "🖼️ Captura del video",
