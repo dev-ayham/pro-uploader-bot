@@ -2,7 +2,8 @@ import "dotenv/config";
 import { Bot } from "grammy";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { MTProtoUploader } from "./services/mtproto-uploader";
+import { MTProtoUploader, UploadProgress } from "./services/mtproto-uploader";
+import { shouldUseYtDlp } from "./services/downloader";
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
 const apiId = parseInt(process.env.API_ID || "0", 10);
@@ -22,12 +23,14 @@ const uploader = new MTProtoUploader(apiId, apiHash, botToken);
 const strings = {
     ar: {
         welcome:
-            "👋 أهلاً بك في بوت الرفع الاحترافي!\n\nأرسل لي أي رابط مباشر وسأقوم برفعه لك إلى تيليجرام (يدعم حتى 2 جيجابايت).",
-        processing: "⏳ جاري المعالجة... يرجى الانتظار.",
-        uploading: (p: number) => `📤 جاري الرفع: ${Math.round(p * 100)}%`,
+            "👋 أهلاً بك في بوت الرفع الاحترافي!\n\nأرسل لي أي رابط وسأقوم برفعه لك إلى تيليجرام (يدعم حتى 2 جيجابايت).\n\nالمنصات المدعومة:\n• روابط مباشرة (mp4, mkv, pdf, zip...)\n• Instagram / Reels / Stories\n• YouTube / Shorts\n• TikTok\n• Twitter / X\n• Facebook / Reddit / Vimeo / Twitch / SoundCloud",
+        processing: "⏳ جاري المعالجة...",
+        extracting: "🔍 جاري استخراج الفيديو من المنصة...",
+        downloading: (p: number) => `📥 جاري التحميل: ${Math.round(p * 100)}%`,
+        uploading: (p: number) => `📤 جاري الرفع إلى تيليجرام: ${Math.round(p * 100)}%`,
         success: "✅ تم الرفع بنجاح!",
-        error: "❌ حدث خطأ أثناء الرفع. تأكد من أن الرابط مباشر وصحيح.",
-        invalid_url: "⚠️ عذراً، هذا الرابط غير صالح.",
+        error: "❌ حدث خطأ أثناء الرفع.",
+        invalid_url: "⚠️ عذراً، لم أجد رابطاً صالحاً في الرسالة.",
     },
 };
 
@@ -44,44 +47,56 @@ bot.on("message:text", async (ctx) => {
     }
 
     const url = match[0];
-    const statusMsg = await ctx.reply(strings.ar.processing);
+    const initialText = shouldUseYtDlp(url)
+        ? strings.ar.extracting
+        : strings.ar.processing;
+    const statusMsg = await ctx.reply(initialText);
 
-    let lastReportedBucket = -1;
+    const editStatus = async (text: string) => {
+        try {
+            await bot.api.editMessageText(
+                ctx.chat.id,
+                statusMsg.message_id,
+                text,
+            );
+        } catch {
+            // Ignore rate-limit / no-change errors
+        }
+    };
+
+    let lastBucket: { phase: string; bucket: number } = {
+        phase: "",
+        bucket: -1,
+    };
     try {
         await uploader.uploadFromUrl(
             ctx.chat.id,
             url,
             `<b>📄 الملف المرفوع:</b>\n<code>${url}</code>`,
-            async (progress) => {
-                // Report progress at each 20% bucket (0, 20, 40, 60, 80)
-                const bucket = Math.floor(progress * 5);
-                if (bucket !== lastReportedBucket && bucket < 5) {
-                    lastReportedBucket = bucket;
-                    try {
-                        await bot.api.editMessageText(
-                            ctx.chat.id,
-                            statusMsg.message_id,
-                            strings.ar.uploading(progress),
-                        );
-                    } catch {
-                        // Ignore rate-limit / no-change errors
-                    }
+            async (progress: UploadProgress) => {
+                // Report at each 20% bucket per phase (0, 20, 40, 60, 80).
+                const bucket = Math.min(4, Math.floor(progress.fraction * 5));
+                if (
+                    progress.phase === lastBucket.phase &&
+                    bucket === lastBucket.bucket
+                ) {
+                    return;
                 }
+                lastBucket = { phase: progress.phase, bucket };
+                const text =
+                    progress.phase === "download"
+                        ? strings.ar.downloading(progress.fraction)
+                        : strings.ar.uploading(progress.fraction);
+                await editStatus(text);
             },
         );
 
-        await bot.api.editMessageText(
-            ctx.chat.id,
-            statusMsg.message_id,
-            strings.ar.success,
-        );
+        await editStatus(strings.ar.success);
     } catch (error) {
         console.error("Upload failed:", error);
-        await bot.api.editMessageText(
-            ctx.chat.id,
-            statusMsg.message_id,
-            strings.ar.error,
-        );
+        const detail =
+            error instanceof Error ? error.message.slice(0, 300) : String(error);
+        await editStatus(`${strings.ar.error}\n\n<code>${detail}</code>`);
     }
 });
 
