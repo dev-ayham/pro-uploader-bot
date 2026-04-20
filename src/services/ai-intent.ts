@@ -66,19 +66,32 @@ const KEYWORDS: Array<{ action: IntentAction; phrases: string[] }> = [
             "صوتي",
             "صوتيه",
             "صوتي بس",
+            "صوت فقط",
             "اغنيه",
             "اغنية",
+            "اغنيه فقط",
+            "موسيقى",
+            "موسيقا",
+            "مقطع صوتي",
             "mp3",
+            "wav",
+            "m4a",
             "بدون فيديو",
             "استخرج الصوت",
             "استخراج الصوت",
+            "استخرج له الصوت",
+            "حولها صوت",
+            "حوله صوت",
             "ابعت الصوت",
             "ابعتلي الصوت",
+            "ابعت لي الصوت",
             "ارسل الصوت",
+            "ارسلي الصوت",
             "اريد الصوت",
             "بدي الصوت",
             "بدي ياه صوت",
             "بدي اياه صوت",
+            "اعطني الصوت",
             // English
             "audio",
             "as audio",
@@ -233,7 +246,7 @@ export async function parseIntentWithOpenAI(
         timeoutMs?: number;
     },
 ): Promise<Intent> {
-    const model = options.model ?? "gpt-4o-mini";
+    const model = options.model ?? "gpt-4.1-nano";
     const timeoutMs = options.timeoutMs ?? 8_000;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -250,16 +263,25 @@ export async function parseIntentWithOpenAI(
                 // object we can parse.
                 response_format: { type: "json_object" },
                 temperature: 0,
-                max_tokens: 32,
+                // The expected reply is `{"action":"audio"}` = ~6 tokens. We
+                // allow 12 for a bit of slack without letting the model
+                // waffle.
+                max_tokens: 12,
                 messages: [
                     {
                         role: "system",
+                        // Terse system prompt (~35 tokens vs the earlier
+                        // ~120) to keep the per-call cost low. The JSON
+                        // schema is enforced by response_format so we
+                        // don't need to describe it at length.
                         content:
-                            'You classify a short message from a Telegram file-uploader bot user. The user already sent a URL earlier; this message is a follow-up instruction. Respond with ONLY a JSON object of shape {"action": "audio"|"document"|"video"|"retry"|"unknown"}. Pick "audio" for requests to get the audio/sound/mp3/song. Pick "document" for requests to send as file/document/uncompressed. Pick "video" for requests to send as video. Pick "retry" for requests to try again / re-do. Pick "unknown" when the message is clearly something else.',
+                            'Classify the user message into one action. Reply ONLY with JSON {"action":"audio"|"document"|"video"|"retry"|"unknown"}. audio=get sound/mp3. document=as file. video=as video. retry=try again.',
                     },
                     {
                         role: "user",
-                        content: message.slice(0, 500),
+                        // Short follow-ups are the norm; truncate
+                        // aggressively to bound input cost.
+                        content: message.slice(0, 200),
                     },
                 ],
             }),
@@ -283,6 +305,53 @@ export async function parseIntentWithOpenAI(
         return { action: "unknown", source: "openai", raw: detail };
     } finally {
         clearTimeout(timer);
+    }
+}
+
+/**
+ * Tiny in-process LRU of recent classifications keyed by
+ * `chatId|normalisedMessage`. The intent for a given short phrase is
+ * deterministic, so when the same chat asks the same thing twice in quick
+ * succession we return the cached result and skip the OpenAI round-trip.
+ * TTL is bounded; entries expire after 10 minutes so a later message with
+ * the same text still gets a fresh decision if the product evolves.
+ */
+const CACHE_TTL_MS = 10 * 60 * 1000;
+const CACHE_MAX = 500;
+const intentCache = new Map<string, { action: IntentAction; at: number }>();
+
+function cacheKey(chatId: number, message: string): string {
+    return `${chatId}|${normalise(message)}`;
+}
+
+export function getCachedIntent(
+    chatId: number,
+    message: string,
+): IntentAction | null {
+    const key = cacheKey(chatId, message);
+    const hit = intentCache.get(key);
+    if (!hit) return null;
+    if (Date.now() - hit.at > CACHE_TTL_MS) {
+        intentCache.delete(key);
+        return null;
+    }
+    // Refresh LRU position so hot entries stay warm.
+    intentCache.delete(key);
+    intentCache.set(key, hit);
+    return hit.action;
+}
+
+export function setCachedIntent(
+    chatId: number,
+    message: string,
+    action: IntentAction,
+): void {
+    if (action === "unknown") return;
+    const key = cacheKey(chatId, message);
+    intentCache.set(key, { action, at: Date.now() });
+    if (intentCache.size > CACHE_MAX) {
+        const oldest = intentCache.keys().next().value;
+        if (oldest !== undefined) intentCache.delete(oldest);
     }
 }
 

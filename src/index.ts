@@ -25,8 +25,10 @@ import {
     setLastUrl,
 } from "./services/db";
 import {
+    getCachedIntent,
     parseIntentByKeywords,
     parseIntentWithOpenAI,
+    setCachedIntent,
     type IntentAction,
 } from "./services/ai-intent";
 import { registerQuickCommandHandlers } from "./handlers/commands";
@@ -258,10 +260,16 @@ bot.on("message:photo", async (ctx) => {
 type UploadMode = "default" | "audio" | "document" | "video";
 
 const AI_DAILY_LIMIT = parseInt(
-    process.env.AI_DAILY_LIMIT_PER_USER || "20",
+    // Default lowered from 20 to 10 for a more conservative initial spend
+    // budget. Users who want a higher ceiling set AI_DAILY_LIMIT_PER_USER
+    // explicitly on Railway.
+    process.env.AI_DAILY_LIMIT_PER_USER || "10",
     10,
 );
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+// gpt-4.1-nano is OpenAI's cheapest text model ($0.10 / 1M input tokens,
+// $0.40 / 1M output), ~33% cheaper than gpt-4o-mini for our classification
+// workload. Override via OPENAI_MODEL if a different model is desired.
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-nano";
 
 /**
  * Shared upload pipeline used by both the URL-in-message path and the AI
@@ -444,6 +452,13 @@ async function classifyFollowUp(
     if (byKeyword !== "unknown") {
         return { action: byKeyword };
     }
+
+    // Before spending an OpenAI call, check the in-process classification
+    // cache. When a user asks the same fuzzy phrase twice within 10 minutes
+    // we don't need to pay again.
+    const cached = getCachedIntent(chatId, text);
+    if (cached) return { action: cached };
+
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) return null;
 
@@ -466,6 +481,7 @@ async function classifyFollowUp(
         model: OPENAI_MODEL,
     });
     if (intent.action === "unknown") return null;
+    setCachedIntent(chatId, text, intent.action);
     return { action: intent.action };
 }
 

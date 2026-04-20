@@ -44,7 +44,7 @@ ENV NODE_ENV=production
 #                                          parser fallback — "give me the
 #                                          audio" etc. Falls back silently
 #                                          to the regex classifier if unset.)
-#   OPENAI_MODEL                          (optional, default "gpt-4o-mini")
-#   AI_DAILY_LIMIT_PER_USER               (optional, default 20 OpenAI calls
+#   OPENAI_MODEL                          (optional, default "gpt-4.1-nano")
+#   AI_DAILY_LIMIT_PER_USER               (optional, default 10 OpenAI calls
 #                                          per chat per UTC day)
 CMD ["node", "dist/index.js"]
