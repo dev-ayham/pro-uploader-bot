@@ -22,9 +22,11 @@ import {
     getUserPrefs,
     incrementAiCallsToday,
     incrementUploadsCount,
+    isBanned,
     setLastUrl,
 } from "./services/db";
 import {
+    chatWithOpenAI,
     getCachedIntent,
     parseIntentByKeywords,
     parseIntentWithOpenAI,
@@ -32,6 +34,8 @@ import {
     type IntentAction,
 } from "./services/ai-intent";
 import { registerQuickCommandHandlers } from "./handlers/commands";
+import { registerAdminHandlers } from "./handlers/admin";
+import { isAdmin } from "./services/admin";
 import { t } from "./i18n";
 import { generateScreenshots } from "./services/screenshots";
 import {
@@ -201,6 +205,26 @@ registerSettingsHandlers(bot);
 // /thumb_clear /reset /platforms /id /ping /stats
 registerQuickCommandHandlers(bot);
 
+// Admin-only commands: /admin /ai_status /stats_all /broadcast /user /ban /unban /bans
+// Every handler short-circuits for non-admin chat ids so accidental
+// callers see nothing.
+registerAdminHandlers(bot);
+
+// Ban guard: drop any update from a chat_id on the banlist before it
+// reaches downstream handlers. Admins are never considered banned, and
+// /unban is dispatched before this middleware via bot.command registrations
+// above — middleware runs in registration order and grammy runs commands
+// through the same middleware chain, so we only short-circuit when the
+// current chat is banned AND not admin. This keeps ban state easy to
+// reverse from chat without shell access.
+bot.use(async (ctx, next) => {
+    const chatId = ctx.chat?.id;
+    if (chatId && !isAdmin(chatId) && isBanned(chatId)) {
+        return;
+    }
+    await next();
+});
+
 bot.on("message:photo", async (ctx) => {
     // Photos are only interesting when the user is mid-flow on /settings →
     // "ضبط الصورة المصغّرة". Any other photo is ignored silently.
@@ -285,10 +309,10 @@ function maxHeightForMode(mode: UploadMode): number | undefined {
 }
 
 const AI_DAILY_LIMIT = parseInt(
-    // Default lowered from 20 to 10 for a more conservative initial spend
-    // budget. Users who want a higher ceiling set AI_DAILY_LIMIT_PER_USER
-    // explicitly on Railway.
-    process.env.AI_DAILY_LIMIT_PER_USER || "10",
+    // Per-chat cap on OpenAI fallback calls in a single UTC day. Override
+    // by setting AI_DAILY_LIMIT_PER_USER on Railway. 20 balances cost
+    // control with enough headroom for a power user to converse naturally.
+    process.env.AI_DAILY_LIMIT_PER_USER || "20",
     10,
 );
 // gpt-4.1-nano is OpenAI's cheapest text model ($0.10 / 1M input tokens,
@@ -512,6 +536,51 @@ async function classifyFollowUp(
 }
 
 /**
+ * Reply conversationally using OpenAI when the user's message is neither
+ * a URL nor a recognised follow-up intent. Consumes one AI-budget unit
+ * per call; if the key is unset or the budget is exhausted we fall back
+ * to the static "لم أفهم" reply so behaviour degrades gracefully.
+ */
+async function respondWithOpenAIChat(
+    ctx: Context,
+    chatId: number,
+    text: string,
+): Promise<void> {
+    const s = t(langOf(chatId));
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+        await ctx.reply(s.ai_intent_unknown);
+        return;
+    }
+
+    let used: number;
+    try {
+        used = incrementAiCallsToday(chatId);
+    } catch (err) {
+        console.error("incrementAiCallsToday failed:", err);
+        await ctx.reply(s.ai_intent_unknown);
+        return;
+    }
+    if (used > AI_DAILY_LIMIT) {
+        await ctx.reply(s.ai_daily_limit(AI_DAILY_LIMIT));
+        return;
+    }
+
+    const reply = await chatWithOpenAI(text, {
+        apiKey,
+        model: OPENAI_MODEL,
+        language: langOf(chatId),
+    });
+    if (!reply) {
+        await ctx.reply(s.ai_intent_unknown);
+        return;
+    }
+    await ctx.reply(reply, {
+        link_preview_options: { is_disabled: true },
+    });
+}
+
+/**
  * In-memory map of chatId → last URL that is waiting on a quality/format
  * selection. Cleared either when the user clicks a button, when the entry
  * expires (5 minutes), or when a new URL replaces it.
@@ -664,44 +733,46 @@ bot.on("message:text", async (ctx) => {
     const s = t(langOf(chatId));
 
     // --- No URL branch: treat the message as an AI follow-up instruction
-    //     against the last remembered URL for this chat.
+    //     against the last remembered URL for this chat, falling back to
+    //     a generic OpenAI chat reply when nothing else matches.
     if (!match) {
         if (!rememberProcessed(chatId, ctx.message.message_id)) return;
 
         const prefs = getUserPrefs(chatId);
-        if (!prefs.lastUrl) {
-            await ctx.reply(s.invalid_url);
-            return;
+
+        // If the user has a lastUrl we try the action classifier first,
+        // because follow-up intents ("as audio", "as document", "retry")
+        // are the hot path. Only when classification fails — or the user
+        // has never sent a URL — do we spend an extra AI call to answer
+        // conversationally.
+        if (prefs.lastUrl) {
+            const resolved = await classifyFollowUp(chatId, text);
+            if (resolved) {
+                if (resolved.rateLimited) {
+                    await ctx.reply(s.ai_daily_limit(AI_DAILY_LIMIT));
+                    return;
+                }
+                switch (resolved.action) {
+                    case "audio":
+                        await runUpload(ctx, prefs.lastUrl, "audio");
+                        return;
+                    case "document":
+                        await runUpload(ctx, prefs.lastUrl, "document");
+                        return;
+                    case "video":
+                        await runUpload(ctx, prefs.lastUrl, "video");
+                        return;
+                    case "retry":
+                        await ctx.reply(s.ai_retrying);
+                        await runUpload(ctx, prefs.lastUrl, "default");
+                        return;
+                    // fall through to chat fallback on "unknown"
+                }
+            }
         }
 
-        const resolved = await classifyFollowUp(chatId, text);
-        if (!resolved) {
-            await ctx.reply(s.ai_intent_unknown);
-            return;
-        }
-        if (resolved.rateLimited) {
-            await ctx.reply(s.ai_daily_limit(AI_DAILY_LIMIT));
-            return;
-        }
-
-        switch (resolved.action) {
-            case "audio":
-                await runUpload(ctx, prefs.lastUrl, "audio");
-                return;
-            case "document":
-                await runUpload(ctx, prefs.lastUrl, "document");
-                return;
-            case "video":
-                await runUpload(ctx, prefs.lastUrl, "video");
-                return;
-            case "retry":
-                await ctx.reply(s.ai_retrying);
-                await runUpload(ctx, prefs.lastUrl, "default");
-                return;
-            default:
-                await ctx.reply(s.ai_intent_unknown);
-                return;
-        }
+        await respondWithOpenAIChat(ctx, chatId, text);
+        return;
     }
 
     // --- URL branch: present the user with an inline quality-selection

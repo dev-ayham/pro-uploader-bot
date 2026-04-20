@@ -9,6 +9,7 @@ import {
     SUPPORTED_LANGS,
     t,
 } from "../i18n";
+import { getAdminIds } from "../services/admin";
 
 function escapeHtml(s: string): string {
     return s
@@ -462,5 +463,47 @@ export async function publishBotCommands(bot: Bot): Promise<void> {
         }
     } catch (err) {
         console.error("setMyCommands failed:", err);
+    }
+
+    // Admin-only command surface. We publish this per-chat using
+    // BotCommandScopeChat so the extra commands appear in the "/" menu for
+    // the admin's private chat only — regular users never see them. Each
+    // admin id comes from the ADMIN_CHAT_IDS env var (plus the hard-coded
+    // baseline owner).
+    const adminCmds: Array<{ command: string; description: string }> = [
+        { command: "admin", description: "Admin menu" },
+        { command: "ai_status", description: "OpenAI health check" },
+        { command: "stats_all", description: "Global stats" },
+        { command: "broadcast", description: "Send message to all users" },
+        { command: "user", description: "Inspect a user by chat_id" },
+        { command: "ban", description: "Ban a chat_id" },
+        { command: "unban", description: "Unban a chat_id" },
+        { command: "bans", description: "List banned chat_ids" },
+    ];
+    // We merge the default user commands with the admin commands so the
+    // admin still sees everything normal users see. Order: user commands
+    // first (most common), admin commands last (flagged with 🔒 prefix in
+    // description for clarity).
+    const adminFull = [
+        ...perLang.en,
+        ...adminCmds.map((c) => ({
+            command: c.command,
+            description: `🔒 ${c.description}`,
+        })),
+    ];
+    for (const adminId of getAdminIds()) {
+        try {
+            await bot.api.setMyCommands(adminFull, {
+                scope: { type: "chat", chat_id: adminId },
+            });
+        } catch (err) {
+            // Most common failure: the admin has never opened a DM with
+            // the bot, so Telegram doesn't let us set a scope against
+            // that chat yet. It'll succeed after their first /start.
+            console.warn(
+                `setMyCommands(chat=${adminId}) failed:`,
+                err instanceof Error ? err.message : err,
+            );
+        }
     }
 }

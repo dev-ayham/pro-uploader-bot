@@ -355,6 +355,94 @@ export function setCachedIntent(
     }
 }
 
+/**
+ * Conversational fallback. Called when both the regex pass and the intent
+ * classifier returned "unknown" and the message is not a URL. Uses the
+ * same OpenAI model but with a chat-style prompt so the bot can answer
+ * generic questions like "مرحبا" or "شو بتقدر تحمل؟" with something
+ * useful instead of "لم أفهم طلبك".
+ *
+ * Cost control: capped to ~120 output tokens, single turn, no history
+ * kept — every call is stateless. Caller is responsible for enforcing
+ * the daily budget.
+ */
+export async function chatWithOpenAI(
+    message: string,
+    options: {
+        apiKey: string;
+        model?: string;
+        timeoutMs?: number;
+        language?: string;
+    },
+): Promise<string | null> {
+    const model = options.model ?? "gpt-4.1-nano";
+    const timeoutMs = options.timeoutMs ?? 8_000;
+    const language = options.language ?? "ar";
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${options.apiKey}`,
+            },
+            body: JSON.stringify({
+                model,
+                temperature: 0.3,
+                // Enough for a friendly 2-3 sentence reply; keeps cost
+                // bounded at roughly $0.00005 per turn on gpt-4.1-nano.
+                max_tokens: 180,
+                messages: [
+                    {
+                        role: "system",
+                        content:
+                            // The assistant persona is narrow on purpose:
+                            // the bot's only job is to download media from
+                            // URLs, so the chat reply should always nudge
+                            // the user back toward sending a link.
+                            "You are the helpful assistant embedded in a " +
+                            "Telegram bot called 'File Uploader'. The bot " +
+                            "downloads videos/audio/files from URLs " +
+                            "(YouTube, Instagram, TikTok, Twitter, and " +
+                            "direct links). Answer briefly (max ~60 words), " +
+                            "conversationally, in the user's language " +
+                            `(reply language code: ${language}). Always end ` +
+                            "by inviting the user to send a link or ask a " +
+                            "follow-up. Do NOT invent features the bot " +
+                            "doesn't have. If the user asks what you can " +
+                            "do, list: download videos, extract audio, " +
+                            "send as document, 1080p/720p/480p/360p " +
+                            "quality choice, custom thumbnail, filename " +
+                            "prefix/suffix, screenshots, /settings menu. " +
+                            "Never ask for personal data. Never output " +
+                            "URLs yourself.",
+                    },
+                    {
+                        role: "user",
+                        content: message.slice(0, 400),
+                    },
+                ],
+            }),
+            signal: controller.signal,
+        });
+        if (!res.ok) return null;
+        const payload = (await res.json()) as {
+            choices?: Array<{ message?: { content?: string } }>;
+        };
+        const raw = payload.choices?.[0]?.message?.content?.trim() ?? "";
+        if (!raw) return null;
+        // Hard cap in case the model ignores max_tokens and produces a
+        // very long reply. We keep the first ~500 chars which is enough
+        // for a normal Telegram message bubble.
+        return raw.slice(0, 500);
+    } catch {
+        return null;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 function tryParseActionJson(raw: string): IntentAction {
     try {
         const obj = JSON.parse(raw) as { action?: string };
