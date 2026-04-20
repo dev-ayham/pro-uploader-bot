@@ -21,6 +21,19 @@ function argsAfterCommand(ctx: Context): string {
     return text.slice(firstSpace + 1).trim();
 }
 
+/**
+ * Minimal HTML escaping for Telegram's HTML parse_mode. Call on any
+ * user-supplied string (ban reason, URLs, etc.) before interpolating
+ * into a message template; otherwise a `&` or `<` in the input causes
+ * Telegram to reject the entire message with a parse error.
+ */
+function escapeHtml(s: string): string {
+    return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
 function formatSeconds(s: number): string {
     if (!Number.isFinite(s) || s <= 0) return "—";
     const d = Math.floor(s / 86_400);
@@ -263,7 +276,7 @@ export function registerAdminHandlers(bot: Bot): void {
             `Uploads: <code>${prefs.uploadsCount}</code>`,
             `AI calls today: <code>${calls}</code>`,
             `Joined: <code>${joined}</code>`,
-            `Last URL: <code>${(prefs.lastUrl || "—").slice(0, 80)}</code>`,
+            `Last URL: <code>${escapeHtml((prefs.lastUrl || "—").slice(0, 80))}</code>`,
         ];
         await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
     });
@@ -287,8 +300,9 @@ export function registerAdminHandlers(bot: Bot): void {
             return;
         }
         setBanned(id, true, reason);
+        const safeReason = escapeHtml(reason);
         await ctx.reply(
-            `🚫 تم حظر <code>${id}</code>${reason ? ` — السبب: ${reason}` : ""}`,
+            `🚫 تم حظر <code>${id}</code>${safeReason ? ` — السبب: ${safeReason}` : ""}`,
             { parse_mode: "HTML" },
         );
     });
@@ -331,7 +345,7 @@ export function registerAdminHandlers(bot: Bot): void {
                     .toISOString()
                     .slice(0, 10);
                 return `<code>${r.chatId}</code> — ${d}${
-                    r.reason ? ` — ${r.reason}` : ""
+                    r.reason ? ` — ${escapeHtml(r.reason)}` : ""
                 }`;
             })
             .join("\n");
