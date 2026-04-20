@@ -6,114 +6,98 @@ import {
     setPendingInput,
 } from "../services/pending-input";
 import { deleteThumbnail, hasThumbnail } from "../services/thumbnails";
+import { Lang, LANG_FLAG, LANG_NATIVE, t } from "../i18n";
 
 const MAX_RENAME_LEN = 64;
 
 type Page = "main" | "upload" | "rename" | "media";
 
-/**
- * Render the /settings home page. We now split configuration into three
- * sub-pages (Upload / Rename / Media) so each screen fits comfortably on a
- * phone without the keyboard becoming a scroll-soup. The root page just
- * shows navigation + the current summary.
- */
-function buildHomeKeyboard(): InlineKeyboard {
+function buildHomeKeyboard(lang: Lang): InlineKeyboard {
+    const s = t(lang);
     return new InlineKeyboard()
-        .text("📤 إعدادات الرفع", "settings:page:upload")
-        .text("✏️ إعادة التسمية", "settings:page:rename")
+        .text(s.settings_upload, "settings:page:upload")
+        .text(s.settings_rename, "settings:page:rename")
         .row()
-        .text("🖼️ الوسائط", "settings:page:media")
-        .text("🌐 اللغة", "settings:toggle:language")
+        .text(s.settings_media, "settings:page:media")
+        .text(`${LANG_FLAG[lang]} ${s.menu_language}`, "menu:lang:pick")
         .row()
-        .text("❌ إغلاق", "settings:close");
+        .text(s.menu_close, "settings:close");
 }
 
 function buildUploadKeyboard(prefs: UserPrefs): InlineKeyboard {
-    const check = (on: boolean): string => (on ? "✅" : "⬜");
+    const s = t(prefs.language);
+    const check = (on: boolean): string => (on ? s.enabled : s.disabled);
     return new InlineKeyboard()
         .text(
-            `${check(prefs.uploadAsDocument)} الرفع كملف (Document)`,
+            `${check(prefs.uploadAsDocument)} ${s.upload_as_document}`,
             "settings:toggle:uploadAsDocument",
         )
         .row()
-        .text(
-            `${check(prefs.spoiler)} وضع السبويلر (Spoiler)`,
-            "settings:toggle:spoiler",
-        )
+        .text(`${check(prefs.spoiler)} ${s.spoiler}`, "settings:toggle:spoiler")
         .row()
-        .text("🔙 رجوع", "settings:page:main");
+        .text(s.settings_back, "settings:page:main");
 }
 
 function buildRenameKeyboard(prefs: UserPrefs): InlineKeyboard {
+    const s = t(prefs.language);
     return new InlineKeyboard()
-        .text("✏️ بادئة", "settings:rename:prefix:set")
+        .text(s.rename_prefix, "settings:rename:prefix:set")
         .text(
-            prefs.renamePrefix ? "🗑️ مسح البادئة" : "—",
+            prefs.renamePrefix ? s.rename_clear_prefix : "—",
             prefs.renamePrefix ? "settings:rename:prefix:clear" : "settings:noop",
         )
         .row()
-        .text("✏️ لاحقة", "settings:rename:suffix:set")
+        .text(s.rename_suffix, "settings:rename:suffix:set")
         .text(
-            prefs.renameSuffix ? "🗑️ مسح اللاحقة" : "—",
+            prefs.renameSuffix ? s.rename_clear_suffix : "—",
             prefs.renameSuffix ? "settings:rename:suffix:clear" : "settings:noop",
         )
         .row()
-        .text("🔙 رجوع", "settings:page:main");
+        .text(s.settings_back, "settings:page:main");
 }
 
 function buildMediaKeyboard(prefs: UserPrefs, thumbSet: boolean): InlineKeyboard {
+    const s = t(prefs.language);
     return new InlineKeyboard()
-        .text(
-            `🖼️ لقطات الفيديو: ${prefs.screenshotsCount || "معطّل"}`,
-            "settings:screenshots:cycle",
-        )
+        .text(s.screenshots_label(prefs.screenshotsCount), "settings:screenshots:cycle")
         .row()
         .text(
-            thumbSet ? "🖼️ تغيير المصغّرة" : "🖼️ ضبط المصغّرة",
+            thumbSet ? s.thumb_change : s.thumb_set,
             "settings:thumb:set",
         )
         .text(
-            thumbSet ? "🗑️ حذف المصغّرة" : "—",
+            thumbSet ? s.thumb_delete : "—",
             thumbSet ? "settings:thumb:clear" : "settings:noop",
         )
         .row()
-        .text("🔙 رجوع", "settings:page:main");
+        .text(s.settings_back, "settings:page:main");
 }
 
 function renderText(page: Page, prefs: UserPrefs, thumbSet: boolean): string {
-    const yes = "✅";
-    const no = "⬜";
-    const header = "<b>⚙️ الإعدادات</b>";
+    const s = t(prefs.language);
+    const header = s.settings_title;
     const summary =
-        `\n\n<b>الملخّص:</b>\n` +
-        `${prefs.uploadAsDocument ? yes : no} الرفع كملف\n` +
-        `${prefs.spoiler ? yes : no} سبويلر\n` +
-        `🌐 اللغة: ${prefs.language === "ar" ? "العربية" : "English"}\n` +
-        `✏️ بادئة: ${prefs.renamePrefix ? `<code>${escapeHtml(prefs.renamePrefix)}</code>` : "—"}\n` +
-        `✏️ لاحقة: ${prefs.renameSuffix ? `<code>${escapeHtml(prefs.renameSuffix)}</code>` : "—"}\n` +
-        `🖼️ لقطات: ${prefs.screenshotsCount > 0 ? prefs.screenshotsCount : "—"}\n` +
-        `🖼️ مصغّرة مخصّصة: ${thumbSet ? "مضبوطة" : "—"}`;
+        `\n\n${s.settings_summary}\n` +
+        `${prefs.uploadAsDocument ? s.enabled : s.disabled} ${s.upload_as_document}\n` +
+        `${prefs.spoiler ? s.enabled : s.disabled} ${s.spoiler}\n` +
+        `${LANG_FLAG[prefs.language]} ${LANG_NATIVE[prefs.language]}\n` +
+        `✏️ ${prefs.renamePrefix ? `<code>${escapeHtml(prefs.renamePrefix)}</code>` : "—"} / ${prefs.renameSuffix ? `<code>${escapeHtml(prefs.renameSuffix)}</code>` : "—"}\n` +
+        `${s.screenshots_label(prefs.screenshotsCount)}\n` +
+        `🖼️ ${thumbSet ? s.set_ : s.not_set}`;
 
     switch (page) {
         case "upload":
-            return `${header}\n\n📤 <b>إعدادات الرفع</b>\n• شكل الإرسال (فيديو أم ملف)\n• إخفاء المحتوى بسبويلر.`;
+            return `${header}\n\n${s.upload_page_desc}`;
         case "rename":
             return (
-                `${header}\n\n✏️ <b>إعادة تسمية الملفات</b>\n` +
-                `البادئة تضاف قبل الاسم، واللاحقة بعده وقبل الامتداد.\n` +
-                `الحد الأقصى ${MAX_RENAME_LEN} حرفاً.\n\n` +
-                `• البادئة: ${prefs.renamePrefix ? `<code>${escapeHtml(prefs.renamePrefix)}</code>` : "—"}\n` +
-                `• اللاحقة: ${prefs.renameSuffix ? `<code>${escapeHtml(prefs.renameSuffix)}</code>` : "—"}`
+                `${header}\n\n${s.rename_page_desc(MAX_RENAME_LEN)}\n\n` +
+                `• ${s.rename_prefix}: ${prefs.renamePrefix ? `<code>${escapeHtml(prefs.renamePrefix)}</code>` : "—"}\n` +
+                `• ${s.rename_suffix}: ${prefs.renameSuffix ? `<code>${escapeHtml(prefs.renameSuffix)}</code>` : "—"}`
             );
         case "media":
-            return (
-                `${header}\n\n🖼️ <b>الوسائط</b>\n` +
-                `• لقطات الفيديو: يُرفق ألبوم بعد كل فيديو. القيم: 0 / 3 / 5 / 10.\n` +
-                `• المصغّرة: صورة ثابتة تُستخدم كـ thumbnail لكل رفع.\n\n` +
-                `• الحالة: لقطات = ${prefs.screenshotsCount > 0 ? prefs.screenshotsCount : "معطّل"}, المصغّرة = ${thumbSet ? "مضبوطة" : "غير مضبوطة"}`
-            );
+            return `${header}\n\n${s.media_page_desc(prefs.screenshotsCount, thumbSet)}`;
         default:
-            return `${header}${summary}\n\n<i>اختر قسماً للتعديل.</i>`;
+            return `${header}${summary}\n\n${s.settings_choose_section}`;
     }
 }
 
@@ -130,12 +114,12 @@ function buildKeyboard(
         case "media":
             return buildMediaKeyboard(prefs, thumbSet);
         default:
-            return buildHomeKeyboard();
+            return buildHomeKeyboard(prefs.language);
     }
 }
 
-function escapeHtml(s: string): string {
-    return s
+function escapeHtml(str: string): string {
+    return str
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;");
@@ -185,12 +169,6 @@ export function registerSettingsHandlers(bot: Bot): void {
                 updateUserPrefs(chatId, { spoiler: !current.spoiler });
                 await updateSettingsMessage(ctx, "upload");
                 return;
-            case "language":
-                updateUserPrefs(chatId, {
-                    language: current.language === "ar" ? "en" : "ar",
-                });
-                await updateSettingsMessage(ctx, "main");
-                return;
             default:
                 await ctx.answerCallbackQuery();
                 return;
@@ -229,10 +207,11 @@ export function registerSettingsHandlers(bot: Bot): void {
         setPendingInput(chatId, {
             kind: which === "prefix" ? "rename_prefix" : "rename_suffix",
         });
-        const prompt =
-            which === "prefix"
-                ? "✏️ أرسل البادئة التي تريد إضافتها قبل اسم كل ملف (حتى 64 حرفاً). أرسل /cancel للإلغاء."
-                : "✏️ أرسل اللاحقة التي تريد إضافتها بعد اسم كل ملف وقبل الامتداد (حتى 64 حرفاً). أرسل /cancel للإلغاء.";
+        const lang = getUserPrefs(chatId).language;
+        const s = t(lang);
+        const prompt = which === "prefix"
+            ? s.rename_prompt_prefix(MAX_RENAME_LEN)
+            : s.rename_prompt_suffix(MAX_RENAME_LEN);
         await ctx.reply(prompt);
         await ctx.answerCallbackQuery();
     });
@@ -250,9 +229,8 @@ export function registerSettingsHandlers(bot: Bot): void {
             return;
         }
         setPendingInput(chatId, { kind: "thumbnail_photo" });
-        await ctx.reply(
-            "🖼️ أرسل الآن صورة لاستخدامها كصورة مصغّرة لجميع الملفات القادمة. أرسل /cancel للإلغاء.",
-        );
+        const lang = getUserPrefs(chatId).language;
+        await ctx.reply(t(lang).thumb_prompt);
         await ctx.answerCallbackQuery();
     });
 
@@ -283,16 +261,15 @@ export async function handlePendingInputIfAny(ctx: Context): Promise<boolean> {
     if (!pending) return false;
 
     const text = ctx.message.text;
-    // Any /command cancels the flow so commands keep working mid-prompt.
+    const lang = getUserPrefs(chatId).language;
+    const s = t(lang);
     if (text === "/" || text.startsWith("/")) {
         clearPendingInput(chatId);
-        await ctx.reply("تم الإلغاء.");
+        await ctx.reply(s.cancel_text);
         return true;
     }
     if (text.length > MAX_RENAME_LEN) {
-        await ctx.reply(
-            `⚠️ النص طويل (الحد الأقصى ${MAX_RENAME_LEN} حرفاً). حاول مرة أخرى.`,
-        );
+        await ctx.reply(s.rename_too_long(MAX_RENAME_LEN));
         return true;
     }
     if (pending.kind === "rename_prefix") {
@@ -300,11 +277,10 @@ export async function handlePendingInputIfAny(ctx: Context): Promise<boolean> {
     } else if (pending.kind === "rename_suffix") {
         updateUserPrefs(chatId, { renameSuffix: text });
     } else {
-        // thumbnail_photo is handled by message:photo, not message:text.
         return false;
     }
     clearPendingInput(chatId);
-    await ctx.reply("✅ تم الحفظ. استخدم /settings لرؤية الإعدادات الحالية.");
+    await ctx.reply(s.rename_saved);
     return true;
 }
 
@@ -322,7 +298,7 @@ async function updateSettingsMessage(ctx: Context, page: Page): Promise<void> {
             reply_markup: buildKeyboard(page, prefs, thumbSet),
         });
     } catch {
-        // "message is not modified" or the source message is gone — harmless.
+        // "message is not modified" or the source message is gone.
     }
     await ctx.answerCallbackQuery();
 }
