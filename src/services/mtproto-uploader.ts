@@ -223,6 +223,15 @@ export interface UploadOptions {
      * having to re-download. Throws are logged but don't fail the upload.
      */
     postUpload?: (filePath: string, filename: string) => Promise<void>;
+    /**
+     * Optional hook that lets callers compute a fresh caption once the
+     * real filename (from yt-dlp's `%(title)s` or the
+     * `Content-Disposition` header) is known. Used to replace a generic
+     * URL-derived caption like `"YouTube · dQw4w9WgXcQ"` with the
+     * actual video title after download. Not invoked on the external
+     * fast path (no file is downloaded there).
+     */
+    captionFromFilename?: (filename: string) => string;
 }
 
 /**
@@ -512,13 +521,16 @@ export class MTProtoUploader {
                               }),
                           ]
                         : undefined;
+                const finalCaption = options.captionFromFilename
+                    ? options.captionFromFilename(downloaded.filename)
+                    : caption;
                 try {
                     await withStallGuard(
                         makeUploadEmitter(stats.size, onProgress),
                         (progressCb) =>
                             this.client.sendFile(chatId, {
                                 file: toUpload,
-                                caption,
+                                caption: finalCaption,
                                 parseMode: "html",
                                 forceDocument:
                                     options.asDocument === true,

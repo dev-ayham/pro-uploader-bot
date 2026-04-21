@@ -29,15 +29,82 @@ export function cleanTitle(url: string, filename?: string): string {
         return stripExt(stripTimestampPrefix(filename.trim()));
     }
 
-    // 3. Last path segment
+    // 3. Last path segment, falling back to host-specific handling when
+    //    the raw segment is generic ("watch", "download", numeric id…).
     try {
         const u = new URL(url);
-        const last = u.pathname.split("/").filter(Boolean).pop();
-        if (last) return stripExt(decodeURIComponent(last));
+        const last = u.pathname.split("/").filter(Boolean).pop() ?? "";
+        const decoded = last ? decodeURIComponent(last) : "";
+        const hostBased = hostSpecificTitle(u);
+        if (hostBased) return hostBased;
+        if (decoded && !isGenericSlug(decoded)) return stripExt(decoded);
+        // Final best-effort: "host / last-segment" so the caption at
+        // least names the source (better than a bare "watch").
+        const host = u.hostname.replace(/^www\./, "");
+        return decoded ? `${host} · ${stripExt(decoded)}` : host;
     } catch {
         // fall through
     }
     return "file";
+}
+
+/**
+ * Special-cased extraction for common streaming hosts whose URL path
+ * ends in a meaningless slug. YouTube's `/watch?v=ID`, TikTok's
+ * `/@user/video/ID`, Twitter/X's `/user/status/ID`, Reddit's
+ * `/r/sub/comments/ID/slug`, etc.
+ */
+function hostSpecificTitle(u: URL): string | null {
+    const host = u.hostname.replace(/^www\./, "").toLowerCase();
+    const segments = u.pathname.split("/").filter(Boolean);
+    if (host === "youtube.com" || host === "m.youtube.com") {
+        const v = u.searchParams.get("v");
+        if (v) return `YouTube · ${v}`;
+    }
+    if (host === "youtu.be") {
+        if (segments[0]) return `YouTube · ${segments[0]}`;
+    }
+    if (host.endsWith("tiktok.com")) {
+        const user = segments.find((s) => s.startsWith("@"));
+        const videoIdx = segments.findIndex((s) => s === "video");
+        const id = videoIdx >= 0 ? segments[videoIdx + 1] : undefined;
+        if (user && id) return `TikTok · ${user} · ${id}`;
+        if (user) return `TikTok · ${user}`;
+    }
+    if (host === "twitter.com" || host === "x.com") {
+        const statusIdx = segments.findIndex((s) => s === "status");
+        const id = statusIdx >= 0 ? segments[statusIdx + 1] : undefined;
+        const user = segments[0];
+        if (user && id) return `${host === "x.com" ? "X" : "Twitter"} · @${user} · ${id}`;
+    }
+    if (host.endsWith("instagram.com")) {
+        const kind = segments[0];
+        const id = segments[1];
+        if (kind && id && (kind === "p" || kind === "reel" || kind === "tv")) {
+            return `Instagram · ${kind} · ${id}`;
+        }
+    }
+    if (host.endsWith("reddit.com")) {
+        const commentsIdx = segments.findIndex((s) => s === "comments");
+        const id = commentsIdx >= 0 ? segments[commentsIdx + 1] : undefined;
+        const slug = commentsIdx >= 0 ? segments[commentsIdx + 2] : undefined;
+        if (slug) return stripExt(decodeURIComponent(slug).replace(/_/g, " "));
+        if (id) return `Reddit · ${id}`;
+    }
+    return null;
+}
+
+/** Segments like "watch", "download", or a pure numeric ID carry no info. */
+function isGenericSlug(s: string): boolean {
+    const lower = s.toLowerCase();
+    const generics = new Set([
+        "watch", "download", "view", "play", "video", "media", "file",
+        "index", "home", "stream", "embed",
+    ]);
+    if (generics.has(lower)) return true;
+    if (/^\d+$/.test(lower)) return true;
+    if (lower.length <= 2) return true;
+    return false;
 }
 
 function stripExt(name: string): string {

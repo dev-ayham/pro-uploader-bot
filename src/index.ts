@@ -72,6 +72,15 @@ function buildCaption(emoji: string, url: string): string {
     return `<b>${emoji}</b> <code>${escapeHtml(title)}</code>`;
 }
 
+function buildCaptionFromFilename(
+    emoji: string,
+    url: string,
+    filename: string,
+): string {
+    const title = cleanTitle(url, filename);
+    return `<b>${emoji}</b> <code>${escapeHtml(title)}</code>`;
+}
+
 function captionEmojiFor(mode: string, url: string): string {
     if (mode === "document") return "📄";
     // "video" and the quality-capped variants ("q1080"/"q720"/...) always
@@ -530,16 +539,23 @@ async function runUpload(
                 );
                 await editStatus(s.ai_audio_success);
             } else {
+                const emoji = captionEmojiFor(mode, url);
                 await uploader.uploadFromUrl(
                     chatId,
                     url,
-                    buildCaption(captionEmojiFor(mode, url), url),
+                    buildCaption(emoji, url),
                     onProgress,
                     {
                         asDocument,
                         maxHeight: maxHeightForMode(mode),
                         renamePrefix: prefs.renamePrefix,
                         renameSuffix: prefs.renameSuffix,
+                        // Rebuild the caption once the real filename is
+                        // known (yt-dlp's %(title)s / Content-Disposition)
+                        // so YouTube/TikTok/etc. get meaningful titles
+                        // instead of "YouTube · dQw4w9WgXcQ".
+                        captionFromFilename: (filename) =>
+                            buildCaptionFromFilename(emoji, url, filename),
                         thumbnailPath: hasThumbnail(chatId)
                             ? thumbnailPath(chatId)
                             : undefined,
