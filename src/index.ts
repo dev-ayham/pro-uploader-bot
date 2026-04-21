@@ -58,6 +58,19 @@ import {
     clearPendingInput,
     getPendingInput,
 } from "./services/pending-input";
+import { cleanTitle } from "./services/title";
+
+function escapeHtml(s: string): string {
+    return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
+function buildCaption(emoji: string, url: string): string {
+    const title = cleanTitle(url);
+    return `<b>${emoji}</b> <code>${escapeHtml(title)}</code>`;
+}
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
 const apiId = parseInt(process.env.API_ID || "0", 10);
@@ -495,7 +508,7 @@ async function runUpload(
                 await uploader.uploadAudioFromUrl(
                     chatId,
                     url,
-                    `<b>🎵</b>\n<code>${url}</code>`,
+                    buildCaption("🎵", url),
                     onProgress,
                     {
                         renamePrefix: prefs.renamePrefix,
@@ -507,7 +520,7 @@ async function runUpload(
                 await uploader.uploadFromUrl(
                     chatId,
                     url,
-                    `<b>📄</b>\n<code>${url}</code>`,
+                    buildCaption("🎬", url),
                     onProgress,
                     {
                         asDocument,

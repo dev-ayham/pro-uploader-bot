@@ -18,6 +18,12 @@ import {
 } from "./downloader";
 import { resolveDataDir } from "./db";
 import { createRateTracker, RichProgress } from "./progress";
+import {
+    generateVideoThumbnail,
+    probeVideo,
+    VideoMetadata,
+} from "./video-metadata";
+import { looksLikeVideoUrl } from "./title";
 
 const TEMP_DIR = "/tmp";
 
@@ -354,12 +360,21 @@ export class MTProtoUploader {
         // bandwidth (free) + the tiny screenshot outbound (~MBs),
         // saving the GBs of outbound that the full download+upload
         // path would have cost.
+        // The external-media API cannot attach a thumbnail or
+        // `DocumentAttributeVideo`, so a playable video preview with a
+        // poster frame is impossible on that path — Telegram surfaces
+        // the result as a "document" tile with no preview, which is
+        // visually worse than the local download+upload path for
+        // anything the user treats as a video. Fall back to the
+        // download+upload flow whenever the URL looks like a video so
+        // we can run ffprobe + ffmpeg and produce a proper preview.
         const canUseExternal =
             !shouldUseYtDlp(url) &&
             !options.spoiler &&
             !options.thumbnailPath &&
             !options.renamePrefix &&
-            !options.renameSuffix;
+            !options.renameSuffix &&
+            !looksLikeVideoUrl(url);
         if (canUseExternal) {
             onProgress?.({ phase: "upload", fraction: 0 });
             const sent = await this.sendByExternalUrl(
@@ -447,19 +462,72 @@ export class MTProtoUploader {
                     options.thumbnailPath,
                 );
             } else {
-                await withStallGuard(
-                    makeUploadEmitter(stats.size, onProgress),
-                    (progressCb) =>
-                        this.client.sendFile(chatId, {
-                            file: toUpload,
-                            caption,
-                            parseMode: "html",
-                            forceDocument: options.asDocument === true,
-                            thumb: options.thumbnailPath,
-                            workers: workersFor(stats.size),
-                            progressCallback: progressCb,
-                        }),
-                );
+                // Produce a Telegram-native "video" tile (with playable
+                // preview, duration, and poster frame) instead of a
+                // plain document, whenever the file actually decodes as
+                // a video and the user did not explicitly request
+                // document mode. `ffprobe` gives us the real width /
+                // height / duration; `ffmpeg` grabs a mid-file frame
+                // for the thumbnail. Any failure here degrades silently
+                // to "no video attrs / no thumb" — the upload always
+                // proceeds.
+                let videoMeta: VideoMetadata | null = null;
+                let autoThumbPath: string | undefined;
+                if (options.asDocument !== true) {
+                    videoMeta = await probeVideo(downloaded.filePath);
+                    if (videoMeta && !options.thumbnailPath) {
+                        autoThumbPath =
+                            (await generateVideoThumbnail(
+                                downloaded.filePath,
+                                videoMeta,
+                                TEMP_DIR,
+                            )) ?? undefined;
+                    }
+                }
+                const videoAttrs: Api.TypeDocumentAttribute[] | undefined =
+                    videoMeta
+                        ? [
+                              new Api.DocumentAttributeFilename({
+                                  fileName: visibleName,
+                              }),
+                              new Api.DocumentAttributeVideo({
+                                  duration: Math.max(
+                                      0,
+                                      Math.floor(videoMeta.durationSec),
+                                  ),
+                                  w: videoMeta.width,
+                                  h: videoMeta.height,
+                                  supportsStreaming: true,
+                              }),
+                          ]
+                        : undefined;
+                try {
+                    await withStallGuard(
+                        makeUploadEmitter(stats.size, onProgress),
+                        (progressCb) =>
+                            this.client.sendFile(chatId, {
+                                file: toUpload,
+                                caption,
+                                parseMode: "html",
+                                forceDocument:
+                                    options.asDocument === true,
+                                supportsStreaming: videoMeta !== null,
+                                thumb:
+                                    options.thumbnailPath ?? autoThumbPath,
+                                attributes: videoAttrs,
+                                workers: workersFor(stats.size),
+                                progressCallback: progressCb,
+                            }),
+                    );
+                } finally {
+                    if (autoThumbPath) {
+                        try {
+                            fs.unlinkSync(autoThumbPath);
+                        } catch {
+                            // best-effort
+                        }
+                    }
+                }
             }
 
             if (options.postUpload) {
