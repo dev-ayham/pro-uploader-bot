@@ -473,7 +473,18 @@ export class MTProtoUploader {
                 // proceeds.
                 let videoMeta: VideoMetadata | null = null;
                 let autoThumbPath: string | undefined;
-                if (options.asDocument !== true) {
+                // `ffprobe` reports still images as single-frame
+                // "video streams" with valid width / height, so gate on
+                // the MIME type first to avoid tagging JPEGs / PNGs
+                // with `DocumentAttributeVideo` (which would push
+                // Telegram to render them as video files rather than
+                // photos).
+                const detectedMime =
+                    (mime.lookup(visibleName) as string) ||
+                    (mime.lookup(downloaded.filename) as string) ||
+                    "";
+                const isVideoMime = detectedMime.startsWith("video/");
+                if (options.asDocument !== true && isVideoMime) {
                     videoMeta = await probeVideo(downloaded.filePath);
                     if (videoMeta && !options.thumbnailPath) {
                         autoThumbPath =

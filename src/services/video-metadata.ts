@@ -23,7 +23,7 @@ export function probeVideo(filePath: string): Promise<VideoMetadata | null> {
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=width,height:format=duration",
+            "stream=width,height,codec_name:format=duration",
             "-of",
             "default=noprint_wrappers=1",
             filePath,
@@ -45,6 +45,17 @@ export function probeVideo(filePath: string): Promise<VideoMetadata | null> {
             const width = parseKV("width");
             const height = parseKV("height");
             const durationSec = parseKV("duration");
+            // Still-image formats (jpeg, png, gif, webp, …) also decode
+            // as a one-frame "video stream" — reject them up front so
+            // photos never end up tagged as DocumentAttributeVideo.
+            const codec = /^codec_name=(.+)$/m.exec(stdout)?.[1]?.trim() ?? "";
+            const imageCodecs = new Set([
+                "mjpeg", "png", "gif", "webp", "bmp", "tiff", "apng",
+            ]);
+            if (imageCodecs.has(codec)) {
+                resolve(null);
+                return;
+            }
             if (width <= 0 || height <= 0) {
                 resolve(null);
                 return;
