@@ -328,12 +328,26 @@ export async function downloadDirect(
     const filePath = path.join(destDir, `${Date.now()}_${filename}`);
 
     if (options.signal?.aborted) throw new DownloadCancelledError();
-    const response = await axios({
-        url,
-        method: "GET",
-        responseType: "stream",
-        signal: options.signal,
-    });
+    let response;
+    try {
+        response = await axios({
+            url,
+            method: "GET",
+            responseType: "stream",
+            signal: options.signal,
+        });
+    } catch (err) {
+        // If the abort signal fires during TCP connect / TLS handshake /
+        // before response headers arrive, axios rejects with its own
+        // `CanceledError` rather than letting our mid-stream `onAbort`
+        // handler run (that listener is only registered AFTER this await
+        // resolves). Translate that shape into our DownloadCancelledError
+        // so the caller's catch-block surfaces the clean "upload
+        // cancelled" message instead of a generic failure with
+        // "canceled" leaking to the user.
+        if (options.signal?.aborted) throw new DownloadCancelledError();
+        throw err;
+    }
 
     // Server-advertised size check. Not all servers return Content-Length
     // (e.g. chunked transfer), in which case we rely on the per-chunk guard
