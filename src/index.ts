@@ -813,7 +813,7 @@ async function runUpload(
                 notFoundStatus === 404 ||
                 notFoundStatus === 410 ||
                 (error instanceof Error &&
-                    /status code (404|410)\b|HTTP Error (404|410)\b|URL no longer exists|This video is (unavailable|no longer available)|Video unavailable|not found/i.test(
+                    /status code (404|410)\b|HTTP Error (404|410)\b|URL no longer exists|This video is (unavailable|no longer available)|Video unavailable/i.test(
                         error.message,
                     ))
             ) {
