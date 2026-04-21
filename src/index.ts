@@ -803,6 +803,23 @@ async function runUpload(
                 await editStatus(s.upload_stalled, undefined, false);
                 return false;
             }
+            // Map common "link is dead" signals to a friendly one-liner so the
+            // user knows to double-check the URL instead of wading through a
+            // stack-ish axios message or yt-dlp's raw stderr.
+            const notFoundStatus =
+                (error as { response?: { status?: number } })?.response
+                    ?.status;
+            if (
+                notFoundStatus === 404 ||
+                notFoundStatus === 410 ||
+                (error instanceof Error &&
+                    /status code (404|410)\b|HTTP Error (404|410)\b|URL no longer exists|This video is (unavailable|no longer available)|Video unavailable|not found/i.test(
+                        error.message,
+                    ))
+            ) {
+                await editStatus(s.url_not_found, undefined, false);
+                return false;
+            }
             const detail =
                 error instanceof Error
                     ? error.message.slice(0, 300)
