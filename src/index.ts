@@ -58,7 +58,7 @@ import {
     clearPendingInput,
     getPendingInput,
 } from "./services/pending-input";
-import { cleanTitle } from "./services/title";
+import { cleanTitle, looksLikeVideoUrl } from "./services/title";
 
 function escapeHtml(s: string): string {
     return s
@@ -70,6 +70,19 @@ function escapeHtml(s: string): string {
 function buildCaption(emoji: string, url: string): string {
     const title = cleanTitle(url);
     return `<b>${emoji}</b> <code>${escapeHtml(title)}</code>`;
+}
+
+function captionEmojiFor(mode: string, url: string): string {
+    if (mode === "document") return "📄";
+    // "video" and the quality-capped variants ("q1080"/"q720"/...) always
+    // mean the user wants a video; shouldUseYtDlp / looksLikeVideoUrl
+    // catch "default" mode for streaming sources and direct video URLs.
+    const isVideo =
+        mode === "video" ||
+        mode.startsWith("q") ||
+        shouldUseYtDlp(url) ||
+        looksLikeVideoUrl(url);
+    return isVideo ? "🎬" : "📄";
 }
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
@@ -520,7 +533,7 @@ async function runUpload(
                 await uploader.uploadFromUrl(
                     chatId,
                     url,
-                    buildCaption(mode === "document" ? "📄" : "🎬", url),
+                    buildCaption(captionEmojiFor(mode, url), url),
                     onProgress,
                     {
                         asDocument,
