@@ -520,7 +520,7 @@ async function runUpload(
                 await uploader.uploadFromUrl(
                     chatId,
                     url,
-                    buildCaption("🎬", url),
+                    buildCaption(mode === "document" ? "📄" : "🎬", url),
                     onProgress,
                     {
                         asDocument,
