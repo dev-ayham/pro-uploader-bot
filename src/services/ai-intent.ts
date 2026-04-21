@@ -102,11 +102,16 @@ const KEYWORDS: Array<{ action: IntentAction; phrases: string[] }> = [
             "arrêter",
             "stoppe",
             // Spanish
+            //   NOTE: do NOT add the bare "para" here — it is one of the
+            //   most common words in Spanish ("for"/"to") and would cause
+            //   substring-matching to classify messages like "para el
+            //   audio" / "comparar" / "preparar" as cancel before the
+            //   audio/document/video intents get a chance. "parar" (to
+            //   stop) is the specific verb form we actually want.
             "cancela",
             "cancelar",
             "detener",
             "parar",
-            "para",
         ],
     },
     {
