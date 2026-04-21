@@ -58,6 +58,41 @@ import {
     clearPendingInput,
     getPendingInput,
 } from "./services/pending-input";
+import { cleanTitle, looksLikeVideoUrl } from "./services/title";
+
+function escapeHtml(s: string): string {
+    return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
+function buildCaption(emoji: string, url: string): string {
+    const title = cleanTitle(url);
+    return `<b>${emoji}</b> <code>${escapeHtml(title)}</code>`;
+}
+
+function buildCaptionFromFilename(
+    emoji: string,
+    url: string,
+    filename: string,
+): string {
+    const title = cleanTitle(url, filename);
+    return `<b>${emoji}</b> <code>${escapeHtml(title)}</code>`;
+}
+
+function captionEmojiFor(mode: string, url: string): string {
+    if (mode === "document") return "📄";
+    // "video" and the quality-capped variants ("q1080"/"q720"/...) always
+    // mean the user wants a video; shouldUseYtDlp / looksLikeVideoUrl
+    // catch "default" mode for streaming sources and direct video URLs.
+    const isVideo =
+        mode === "video" ||
+        mode.startsWith("q") ||
+        shouldUseYtDlp(url) ||
+        looksLikeVideoUrl(url);
+    return isVideo ? "🎬" : "📄";
+}
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
 const apiId = parseInt(process.env.API_ID || "0", 10);
@@ -495,7 +530,7 @@ async function runUpload(
                 await uploader.uploadAudioFromUrl(
                     chatId,
                     url,
-                    `<b>🎵</b>\n<code>${url}</code>`,
+                    buildCaption("🎵", url),
                     onProgress,
                     {
                         renamePrefix: prefs.renamePrefix,
@@ -504,16 +539,23 @@ async function runUpload(
                 );
                 await editStatus(s.ai_audio_success);
             } else {
+                const emoji = captionEmojiFor(mode, url);
                 await uploader.uploadFromUrl(
                     chatId,
                     url,
-                    `<b>📄</b>\n<code>${url}</code>`,
+                    buildCaption(emoji, url),
                     onProgress,
                     {
                         asDocument,
                         maxHeight: maxHeightForMode(mode),
                         renamePrefix: prefs.renamePrefix,
                         renameSuffix: prefs.renameSuffix,
+                        // Rebuild the caption once the real filename is
+                        // known (yt-dlp's %(title)s / Content-Disposition)
+                        // so YouTube/TikTok/etc. get meaningful titles
+                        // instead of "YouTube · dQw4w9WgXcQ".
+                        captionFromFilename: (filename) =>
+                            buildCaptionFromFilename(emoji, url, filename),
                         thumbnailPath: hasThumbnail(chatId)
                             ? thumbnailPath(chatId)
                             : undefined,
