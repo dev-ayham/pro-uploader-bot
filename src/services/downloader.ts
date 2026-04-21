@@ -2,6 +2,77 @@ import { spawn } from "child_process";
 import axios from "axios";
 import * as fs from "fs";
 import * as path from "path";
+import { createRateTracker, RichProgress } from "./progress";
+
+/**
+ * Callback surface shared by both the direct-HTTP and yt-dlp downloaders.
+ * Emits richer telemetry than a bare fraction so the UI can render a
+ * progress line with bytes / speed / ETA — see `src/services/progress.ts`.
+ */
+export type DownloadProgress = (rich: RichProgress) => void;
+
+/**
+ * Parse a single yt-dlp `[download]` progress line into a {@link RichProgress}.
+ * yt-dlp already prints the exact size / speed / ETA the user cares about;
+ * extracting them avoids an extra rate-tracker and matches what the
+ * upstream CLI would show.
+ *
+ *   `[download]  42.3% of   10.2MiB at   1.5MiB/s ETA 00:04`
+ *   `[download]  42.3% of ~10.2MiB at   1.5MiB/s ETA 00:04`
+ *   `[download] 100% of   10.2MiB in 00:06`
+ */
+export function parseYtDlpProgress(line: string): RichProgress | null {
+    const pct = /\[download\]\s+([\d.]+)%/.exec(line);
+    if (!pct) return null;
+    const fraction = Math.min(1, Math.max(0, parseFloat(pct[1]) / 100));
+    const rich: RichProgress = { fraction };
+
+    const sizeMatch = /of\s+~?\s*([\d.]+)\s*([KMGT]i?B)/i.exec(line);
+    if (sizeMatch) {
+        const total = parseSizeToBytes(sizeMatch[1], sizeMatch[2]);
+        if (total !== undefined) {
+            rich.totalBytes = total;
+            rich.doneBytes = Math.round(total * fraction);
+        }
+    }
+
+    const speedMatch = /at\s+([\d.]+)\s*([KMGT]?i?B)\/s/i.exec(line);
+    if (speedMatch) {
+        const bps = parseSizeToBytes(speedMatch[1], speedMatch[2]);
+        if (bps !== undefined) rich.speedBps = bps;
+    }
+
+    const etaMatch = /ETA\s+(\d+):(\d+)(?::(\d+))?/.exec(line);
+    if (etaMatch) {
+        const a = parseInt(etaMatch[1], 10);
+        const b = parseInt(etaMatch[2], 10);
+        const c = etaMatch[3] !== undefined ? parseInt(etaMatch[3], 10) : NaN;
+        rich.etaSec = Number.isFinite(c) ? a * 3600 + b * 60 + c : a * 60 + b;
+    }
+
+    return rich;
+}
+
+function parseSizeToBytes(value: string, unit: string): number | undefined {
+    const n = parseFloat(value);
+    if (!Number.isFinite(n)) return undefined;
+    const u = unit.toUpperCase();
+    // Support both SI-ish (KB/MB/GB/TB) and yt-dlp's binary spellings
+    // (KiB/MiB/GiB/TiB). yt-dlp actually reports in IEC but tolerate both.
+    const mult: Record<string, number> = {
+        B: 1,
+        KB: 1024,
+        KIB: 1024,
+        MB: 1024 ** 2,
+        MIB: 1024 ** 2,
+        GB: 1024 ** 3,
+        GIB: 1024 ** 3,
+        TB: 1024 ** 4,
+        TIB: 1024 ** 4,
+    };
+    const m = mult[u];
+    return m ? Math.round(n * m) : undefined;
+}
 
 /**
  * Number of HLS/DASH fragments yt-dlp fetches in parallel per download,
@@ -245,7 +316,7 @@ export interface DownloadResult {
 export async function downloadDirect(
     url: string,
     destDir: string,
-    options: { maxFileSizeMb?: number } = {},
+    options: { maxFileSizeMb?: number; onProgress?: DownloadProgress } = {},
 ): Promise<DownloadResult> {
     const parsedUrl = new URL(url);
     const filename =
@@ -263,10 +334,13 @@ export async function downloadDirect(
     // inside the stream pipeline below.
     const limitMb = options.maxFileSizeMb;
     const limitBytes = limitMb && limitMb > 0 ? limitMb * 1024 * 1024 : 0;
-    const contentLength = Number(response.headers["content-length"]);
+    const rawLength = Number(response.headers["content-length"]);
+    const contentLength = Number.isFinite(rawLength) && rawLength > 0
+        ? rawLength
+        : undefined;
     if (
         limitBytes > 0 &&
-        Number.isFinite(contentLength) &&
+        contentLength !== undefined &&
         contentLength > limitBytes
     ) {
         response.data.destroy?.();
@@ -284,16 +358,34 @@ export async function downloadDirect(
     let received = 0;
     let sizeExceeded = false;
     const sizeLimitError = new Error("__file_too_large__");
-    if (limitBytes > 0) {
-        response.data.on("data", (chunk: Buffer) => {
-            received += chunk.length;
-            if (received > limitBytes) {
-                sizeExceeded = true;
-                response.data.destroy?.(sizeLimitError);
-                writer.destroy(sizeLimitError);
+
+    // Progress tracker: only instantiated when the caller wants updates.
+    // Emits no more than ~4 ticks / second so Telegram rate limits are
+    // never threatened regardless of how fast bytes arrive. Every
+    // incoming chunk still updates `received` (that counter is used by
+    // the size guard).
+    const tracker = options.onProgress ? createRateTracker() : null;
+    let lastEmit = 0;
+    response.data.on("data", (chunk: Buffer) => {
+        received += chunk.length;
+        if (limitBytes > 0 && received > limitBytes) {
+            sizeExceeded = true;
+            response.data.destroy?.(sizeLimitError);
+            writer.destroy(sizeLimitError);
+            return;
+        }
+        if (tracker && options.onProgress) {
+            const now = Date.now();
+            if (now - lastEmit >= 250) {
+                lastEmit = now;
+                try {
+                    options.onProgress(tracker(received, contentLength));
+                } catch {
+                    // Callback errors must never kill the download.
+                }
             }
-        });
-    }
+        }
+    });
 
     try {
         await new Promise<void>((resolve, reject) => {
@@ -320,6 +412,22 @@ export async function downloadDirect(
             // best-effort cleanup
         }
         throw err;
+    }
+
+    // Final 100% tick so the UI snaps to a complete bar instead of leaving
+    // the last partial tick (e.g. 97%) on screen while the upload phase
+    // starts.
+    if (options.onProgress) {
+        try {
+            const total = contentLength ?? received;
+            options.onProgress({
+                fraction: 1,
+                doneBytes: received,
+                totalBytes: total,
+            });
+        } catch {
+            // Ignored
+        }
     }
 
     return { filePath, filename };
@@ -369,7 +477,7 @@ export class FileTooLargeError extends Error {
 export async function downloadWithYtDlp(
     url: string,
     destDir: string,
-    onProgress?: (fraction: number) => void,
+    onProgress?: DownloadProgress,
     options: YtDlpOptions = {},
 ): Promise<DownloadResult> {
     await fs.promises.mkdir(destDir, { recursive: true });
@@ -439,17 +547,11 @@ export async function downloadWithYtDlp(
             const text = chunk.toString();
             stderr += text;
             if (!onProgress) return;
-            // yt-dlp progress lines look like:
-            //   [download]  42.3% of   10.2MiB at   1.5MiB/s ETA 00:04
             for (const line of text.split("\n")) {
-                const m = /\[download\]\s+([\d.]+)%/.exec(line);
-                if (m) {
-                    const fraction = Math.min(
-                        1,
-                        Math.max(0, parseFloat(m[1]) / 100),
-                    );
+                const rich = parseYtDlpProgress(line);
+                if (rich) {
                     try {
-                        onProgress(fraction);
+                        onProgress(rich);
                     } catch {
                         // ignore callback errors
                     }
@@ -517,7 +619,7 @@ export async function downloadWithYtDlp(
 export async function downloadAudioWithYtDlp(
     url: string,
     destDir: string,
-    onProgress?: (fraction: number) => void,
+    onProgress?: DownloadProgress,
     options: YtDlpOptions = {},
 ): Promise<DownloadResult> {
     await fs.promises.mkdir(destDir, { recursive: true });
@@ -575,14 +677,10 @@ export async function downloadAudioWithYtDlp(
             stderr += text;
             if (!onProgress) return;
             for (const line of text.split("\n")) {
-                const m = /\[download\]\s+([\d.]+)%/.exec(line);
-                if (m) {
-                    const fraction = Math.min(
-                        1,
-                        Math.max(0, parseFloat(m[1]) / 100),
-                    );
+                const rich = parseYtDlpProgress(line);
+                if (rich) {
                     try {
-                        onProgress(fraction);
+                        onProgress(rich);
                     } catch {
                         // ignore callback errors
                     }
