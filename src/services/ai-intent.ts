@@ -22,6 +22,7 @@ export type IntentAction =
     | "document"
     | "video"
     | "retry"
+    | "cancel"
     | "unknown";
 
 export interface Intent {
@@ -58,6 +59,71 @@ function normalise(s: string): string {
  * "retry".
  */
 const KEYWORDS: Array<{ action: IntentAction; phrases: string[] }> = [
+    {
+        // Checked first so phrases like "الغي العمليتين" / "stop it" /
+        // "ايقاف" never get misclassified as "retry" or fall through to
+        // the OpenAI fallback where the model has been observed to
+        // guess "retry" and kick off a brand-new (expensive) upload.
+        action: "cancel",
+        phrases: [
+            // Arabic
+            //   "الغ" (3-char stem) is intentionally omitted — even with
+            //   word-boundary matching it's not a real word, and every
+            //   legitimate cancel form ("الغي", "الغاء", "إلغاء", plus
+            //   the multi-word phrases) is covered below.
+            "الغي",
+            "الغاء",
+            "إلغاء",
+            "الغي العمليه",
+            "الغي العمليات",
+            "الغي العمليتين",
+            "ايقاف",
+            "إيقاف",
+            "ايقافهم",
+            "ايقافها",
+            "ايقافه",
+            "اوقف",
+            "أوقف",
+            "توقف",
+            "وقف",
+            //   "بطل" is intentionally omitted: after stripping the
+            //   Arabic definite article from "البطل" ("the hero") the
+            //   remaining token is "بطل", which would otherwise fire
+            //   cancel for unrelated messages. "بطله" / "بطلها" /
+            //   "بطلهم" below cover the verb-form "cancel it" usages
+            //   unambiguously.
+            "بطله",
+            "بطلها",
+            "بطلهم",
+            "كنسل",
+            // English
+            "cancel",
+            "stop",
+            "abort",
+            "kill it",
+            "stop it",
+            // Turkish
+            "iptal",
+            "durdur",
+            // French
+            "annule",
+            "annuler",
+            "arrete",
+            "arrêter",
+            "stoppe",
+            // Spanish
+            //   NOTE: do NOT add the bare "para" here — it is one of the
+            //   most common words in Spanish ("for"/"to") and would cause
+            //   substring-matching to classify messages like "para el
+            //   audio" / "comparar" / "preparar" as cancel before the
+            //   audio/document/video intents get a chance. "parar" (to
+            //   stop) is the specific verb form we actually want.
+            "cancela",
+            "cancelar",
+            "detener",
+            "parar",
+        ],
+    },
     {
         action: "audio",
         phrases: [
@@ -215,17 +281,75 @@ const KEYWORDS: Array<{ action: IntentAction; phrases: string[] }> = [
 ];
 
 /**
+ * Split a normalised string into word tokens. We treat anything that
+ * isn't a letter (Latin, Arabic, Cyrillic …) or digit as a word
+ * separator. This is used to word-match short single-token keywords so
+ * that, for example, the Arabic cancel stem "الغ" does NOT match inside
+ * common everyday words like "الغداء" (lunch), and "parar" does not
+ * match inside "comparar" / "preparar".
+ */
+function tokenise(s: string): string[] {
+    if (!s) return [];
+    // Letters (incl. Arabic / accented) + digits count as word chars;
+    // everything else (spaces, punctuation, emoji) is a separator.
+    const raw = s.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 0);
+    // For each Arabic token we also emit a copy with the definite
+    // article "ال" stripped so that a bare keyword like "صوت" still
+    // word-matches the user typing "الصوت". The stripped form is only
+    // added when the result is still at least 2 chars to avoid turning
+    // short tokens into single-letter noise that could false-fire.
+    const expanded = new Set<string>(raw);
+    for (const tok of raw) {
+        if (tok.length >= 4 && tok.startsWith("\u0627\u0644")) {
+            const stripped = tok.slice(2);
+            if (stripped.length >= 2) expanded.add(stripped);
+        }
+    }
+    return [...expanded];
+}
+
+/**
+ * Decide how a given keyword phrase should match against the message.
+ *
+ * - Multi-word phrases (those containing whitespace, e.g. "stop it" /
+ *   "الغي العمليه") are matched as substrings — they're already long
+ *   and specific enough that accidental collisions are effectively
+ *   impossible.
+ * - Single-token phrases are matched as **whole words** against the
+ *   tokenised message. This is what stops short stems like "الغ" /
+ *   "وقف" / "parar" / "stop" from firing inside common unrelated
+ *   words (الغداء / موقف / comparar / nonstop).
+ */
+function phraseMatches(
+    normalisedMessage: string,
+    tokenisedMessage: string[],
+    phrase: string,
+): boolean {
+    const normalisedPhrase = normalise(phrase);
+    if (!normalisedPhrase) return false;
+    if (/\s/.test(normalisedPhrase)) {
+        return normalisedMessage.includes(normalisedPhrase);
+    }
+    return tokenisedMessage.includes(normalisedPhrase);
+}
+
+/**
  * First pass: keyword lookup. Returns a confident action when any phrase
- * matches the normalised message as a substring, or "unknown" when nothing
- * fires. The function is deterministic, zero-cost and runs on every
- * candidate message.
+ * matches, or "unknown" when nothing fires. Matching uses word-boundary
+ * semantics for single-token keywords (see {@link phraseMatches}) so
+ * short stems cannot accidentally fire inside unrelated words — a real
+ * bug we hit when the Spanish "para" / "parar" and the Arabic "الغ"
+ * stems were misclassifying everyday messages as cancel intents.
+ * The function is deterministic, zero-cost and runs on every candidate
+ * message.
  */
 export function parseIntentByKeywords(message: string): IntentAction {
     const n = normalise(message);
     if (!n) return "unknown";
+    const tokens = tokenise(n);
     for (const { action, phrases } of KEYWORDS) {
         for (const phrase of phrases) {
-            if (n.includes(normalise(phrase))) return action;
+            if (phraseMatches(n, tokens, phrase)) return action;
         }
     }
     return "unknown";
@@ -275,7 +399,7 @@ export async function parseIntentWithOpenAI(
                         // schema is enforced by response_format so we
                         // don't need to describe it at length.
                         content:
-                            'Classify the user message into one action. Reply ONLY with JSON {"action":"audio"|"document"|"video"|"retry"|"unknown"}. audio=get sound/mp3. document=as file. video=as video. retry=try again.',
+                            'Classify the user message into one action. Reply ONLY with JSON {"action":"audio"|"document"|"video"|"retry"|"cancel"|"unknown"}. audio=get sound/mp3. document=as file. video=as video. retry=try again. cancel=stop/abort the current upload.',
                     },
                     {
                         role: "user",
@@ -451,6 +575,7 @@ function tryParseActionJson(raw: string): IntentAction {
             case "document":
             case "video":
             case "retry":
+            case "cancel":
                 return obj.action;
             default:
                 return "unknown";

@@ -6,8 +6,13 @@ import { Bot, Context, InlineKeyboard, InputFile } from "grammy";
 import type { InputMediaPhoto } from "grammy/types";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { MTProtoUploader, UploadProgress } from "./services/mtproto-uploader";
 import {
+    MTProtoUploader,
+    UploadCancelledError,
+    UploadProgress,
+} from "./services/mtproto-uploader";
+import {
+    DownloadCancelledError,
     FileTooLargeError,
     isDirectFileUrl,
     probeIsDirectFile,
@@ -185,6 +190,55 @@ function langOf(chatId: number) {
 const processedMessages = new Set<string>();
 const inFlightChats = new Set<number>();
 const recentUrls = new Map<number, { url: string; at: number }>();
+
+/**
+ * Per-chat AbortController for the single upload currently in flight. The
+ * "Cancel" button on the progress status message calls `.abort()` on the
+ * entry for that chat, which unwinds the download + upload promise chain
+ * and releases the concurrency slot.
+ */
+const chatUploadCancellers = new Map<number, AbortController>();
+
+/**
+ * Per-chat wall-clock timestamp (ms since epoch) at which the user is
+ * allowed to start their next upload. Set to `Date.now() + COOLDOWN_MS`
+ * in the {@link runUpload} finally block regardless of success / failure
+ * / cancellation so a single user can never start more than one upload
+ * per COOLDOWN_MS window.
+ */
+const chatCooldownUntil = new Map<number, number>();
+
+/**
+ * Hard per-user cooldown between consecutive uploads. 5 minutes matches
+ * the competitor bots' rate-limiting and is comfortable enough that a
+ * well-behaved user will never hit it in normal operation while still
+ * making it expensive for the AI-intent parser to accidentally kick off
+ * back-to-back re-downloads of the same 2 GB file.
+ */
+const UPLOAD_COOLDOWN_MS = (() => {
+    const raw = process.env.UPLOAD_COOLDOWN_MS;
+    const n = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) && n >= 0 ? n : 5 * 60 * 1000;
+})();
+
+/**
+ * Soft cap on `chatCooldownUntil`. When the map exceeds this size the
+ * runUpload finally block prunes expired entries and (if still over)
+ * evicts oldest insertions. Chosen large enough that a single burst of
+ * legitimate traffic (~thousands of concurrent users) does not trigger
+ * eviction of still-live cooldown windows, but small enough that
+ * long-lived processes never accumulate unbounded state. Matches the
+ * bounding style of `processedMessages` (5000) and `intentCache` (500)
+ * elsewhere in the codebase.
+ */
+const COOLDOWN_MAP_MAX = 10_000;
+
+/**
+ * Fixed callback-data payload for the single inline "Cancel" button
+ * attached to the status-message keyboard. The chat id is implied by
+ * the callback context so we don't need to encode it here.
+ */
+const CANCEL_UPLOAD_CALLBACK = "upload:cancel";
 
 function rememberProcessed(chatId: number, messageId: number): boolean {
     const key = `${chatId}:${messageId}`;
@@ -432,8 +486,22 @@ async function runUpload(
     const chatId = ctx.chat.id;
     const s = t(langOf(chatId));
 
+    // Strict per-user single-flight guard + per-user 5-minute cooldown.
+    // These are the core of the "1 upload per user per 5 minutes" rule
+    // the product requires — every other path (URL receipt, quality
+    // menu, AI follow-up intents) funnels through this function, so
+    // enforcing here catches them all.
     if (inFlightChats.has(chatId)) {
         await ctx.reply(s.already_in_flight);
+        return false;
+    }
+    const cooldownUntil = chatCooldownUntil.get(chatId) ?? 0;
+    const remainingMs = cooldownUntil - Date.now();
+    if (remainingMs > 0) {
+        const totalSec = Math.ceil(remainingMs / 1000);
+        const minutes = Math.floor(totalSec / 60);
+        const seconds = totalSec % 60;
+        await ctx.reply(s.cooldown_active(minutes, seconds));
         return false;
     }
 
@@ -447,6 +515,8 @@ async function runUpload(
     }
 
     inFlightChats.add(chatId);
+    const abortController = new AbortController();
+    chatUploadCancellers.set(chatId, abortController);
     try {
         const initialText =
             mode === "audio"
@@ -459,21 +529,44 @@ async function runUpload(
                 ? s.extracting
                 : s.processing;
 
+        // The progress status message carries a single inline "Cancel"
+        // button that routes to the CANCEL_UPLOAD_CALLBACK handler. We
+        // keep the same keyboard attached through every editMessageText
+        // so the user can abort at any point during download or upload.
+        const cancelKeyboard = new InlineKeyboard().text(
+            s.upload_cancel_button,
+            CANCEL_UPLOAD_CALLBACK,
+        );
+
         let statusMsg: { message_id: number } | undefined;
         try {
-            statusMsg = await ctx.reply(initialText);
+            statusMsg = await ctx.reply(initialText, {
+                reply_markup: cancelKeyboard,
+            });
         } catch (err) {
             console.error("Failed to send initial status message:", err);
         }
 
-        const editStatus = async (text: string, parseMode?: "HTML") => {
+        const editStatus = async (
+            text: string,
+            parseMode?: "HTML",
+            keepCancelButton = true,
+        ) => {
             if (!statusMsg) return;
             try {
                 await bot.api.editMessageText(
                     chatId,
                     statusMsg.message_id,
                     text,
-                    parseMode ? { parse_mode: parseMode } : undefined,
+                    {
+                        ...(parseMode ? { parse_mode: parseMode } : {}),
+                        // Terminal edits (success, error, cancelled) drop
+                        // the cancel button — clicking it after the
+                        // upload has resolved would be confusing.
+                        reply_markup: keepCancelButton
+                            ? cancelKeyboard
+                            : undefined,
+                    },
                 );
             } catch {
                 // Ignore rate-limit / no-change errors
@@ -535,9 +628,10 @@ async function runUpload(
                     {
                         renamePrefix: prefs.renamePrefix,
                         renameSuffix: prefs.renameSuffix,
+                        signal: abortController.signal,
                     },
                 );
-                await editStatus(s.ai_audio_success);
+                await editStatus(s.ai_audio_success, undefined, false);
             } else {
                 const emoji = captionEmojiFor(mode, url);
                 await uploader.uploadFromUrl(
@@ -550,6 +644,7 @@ async function runUpload(
                         maxHeight: maxHeightForMode(mode),
                         renamePrefix: prefs.renamePrefix,
                         renameSuffix: prefs.renameSuffix,
+                        signal: abortController.signal,
                         // Rebuild the caption once the real filename is
                         // known (yt-dlp's %(title)s / Content-Disposition)
                         // so YouTube/TikTok/etc. get meaningful titles
@@ -572,7 +667,7 @@ async function runUpload(
                                 : undefined,
                     },
                 );
-                await editStatus(s.success);
+                await editStatus(s.success, undefined, false);
             }
 
             // Remember this URL so an AI follow-up ("give me the audio")
@@ -589,6 +684,18 @@ async function runUpload(
             }
             return true;
         } catch (error) {
+            // User-initiated cancel (clicked the Cancel button) surfaces
+            // as either DownloadCancelledError (aborted mid-download) or
+            // UploadCancelledError (aborted mid-upload). Report the same
+            // friendly message for both — stack traces and raw Error
+            // messages belong in the logs, not in the user's chat.
+            if (
+                error instanceof DownloadCancelledError ||
+                error instanceof UploadCancelledError
+            ) {
+                await editStatus(s.upload_cancelled, undefined, false);
+                return false;
+            }
             console.error(`Upload (${mode}) failed:`, error);
             // Surface the size-cap rejection as a friendly message instead of
             // the raw "File exceeds 2000MB limit" Error.message — users should
@@ -602,7 +709,7 @@ async function runUpload(
                     error instanceof FileTooLargeError
                         ? error.limitMb
                         : MAX_FILE_SIZE_MB;
-                await editStatus(s.file_too_large(limit));
+                await editStatus(s.file_too_large(limit), undefined, false);
                 return false;
             }
             // The MTProto uploader's stall watchdog throws an Error whose
@@ -613,7 +720,7 @@ async function runUpload(
                 error instanceof Error &&
                 /^Upload stalled/i.test(error.message)
             ) {
-                await editStatus(s.upload_stalled);
+                await editStatus(s.upload_stalled, undefined, false);
                 return false;
             }
             const detail =
@@ -623,11 +730,42 @@ async function runUpload(
             const escaped = escapeHtmlForMsg(detail);
             const template =
                 mode === "audio" ? s.ai_audio_error(escaped) : `${s.error}\n\n<code>${escaped}</code>`;
-            await editStatus(template, "HTML");
+            await editStatus(template, "HTML", false);
             return false;
         }
     } finally {
         inFlightChats.delete(chatId);
+        chatUploadCancellers.delete(chatId);
+        // Start the 5-minute cooldown *regardless* of success / failure /
+        // cancellation. If the user cancelled early this still costs them
+        // a cooldown — intentional, matches the product spec of "1 op per
+        // 5 minutes per user" without creating a retry-spam loophole.
+        if (UPLOAD_COOLDOWN_MS > 0) {
+            const now = Date.now();
+            chatCooldownUntil.set(chatId, now + UPLOAD_COOLDOWN_MS);
+            // Sweep expired entries opportunistically so the map
+            // doesn't grow unboundedly with one entry per user that
+            // ever uploaded. Each entry is tiny (two numbers) but
+            // long-lived bot processes can accumulate tens of
+            // thousands of stale rows otherwise. We only scan when
+            // the map is already large to keep the common path O(1).
+            if (chatCooldownUntil.size > COOLDOWN_MAP_MAX) {
+                for (const [cid, until] of chatCooldownUntil) {
+                    if (until <= now) chatCooldownUntil.delete(cid);
+                }
+                // Bounded belt-and-braces: if everyone is still
+                // inside their cooldown window we fall back to
+                // evicting the oldest insertion. Map iteration is
+                // insertion-ordered in JS, so the first key is the
+                // oldest. Keeps memory deterministic under pathological
+                // growth (DoS / bot spam).
+                while (chatCooldownUntil.size > COOLDOWN_MAP_MAX) {
+                    const oldest = chatCooldownUntil.keys().next().value;
+                    if (oldest === undefined) break;
+                    chatCooldownUntil.delete(oldest);
+                }
+            }
+        }
     }
 }
 
@@ -834,6 +972,34 @@ const QUALITY_MODE_MAP: Record<string, UploadMode> = {
     doc: "document",
 };
 
+/**
+ * "Cancel" button on the progress status message. Aborts the active
+ * upload for this chat (download + upload pipelines both unwind via
+ * AbortSignal) and acknowledges the click. The runUpload finally block
+ * takes care of the cooldown bookkeeping and the terminal edit of the
+ * status message — we do NOT edit the message here to avoid racing
+ * with the runUpload catch handler.
+ */
+bot.callbackQuery(CANCEL_UPLOAD_CALLBACK, async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) {
+        await ctx.answerCallbackQuery();
+        return;
+    }
+    const s = t(langOf(chatId));
+    const controller = chatUploadCancellers.get(chatId);
+    if (!controller) {
+        await ctx.answerCallbackQuery({ text: s.upload_cancelled });
+        return;
+    }
+    try {
+        controller.abort();
+    } catch {
+        // AbortController.abort() never throws, but be defensive.
+    }
+    await ctx.answerCallbackQuery({ text: s.upload_cancelled });
+});
+
 bot.callbackQuery(/^q:(audio|best|1080|720|480|360|doc|cancel)$/, async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId) {
@@ -934,6 +1100,33 @@ bot.on("message:text", async (ctx) => {
             if (resolved) {
                 if (resolved.rateLimited) {
                     await ctx.reply(s.ai_daily_limit(AI_DAILY_LIMIT));
+                    return;
+                }
+                // If the user already has an upload running we must
+                // NEVER kick off another one here — that's exactly the
+                // "AI re-triggered a duplicate upload" bug the product
+                // guards against. For cancel-intent messages we abort
+                // the active upload; for every other intent we just
+                // tell the user to wait. Any message that classifies
+                // as "cancel" is handled uniformly regardless of state:
+                // if nothing is running the cancel becomes a no-op with
+                // a polite ack.
+                if (resolved.action === "cancel") {
+                    const controller = chatUploadCancellers.get(chatId);
+                    if (controller) {
+                        try {
+                            controller.abort();
+                        } catch {
+                            // ignore
+                        }
+                        await ctx.reply(s.upload_cancelled);
+                    } else {
+                        await ctx.reply(s.cancel_done);
+                    }
+                    return;
+                }
+                if (inFlightChats.has(chatId)) {
+                    await ctx.reply(s.already_in_flight);
                     return;
                 }
                 switch (resolved.action) {

@@ -166,6 +166,13 @@ interface Strings {
     file_too_large: (limitMb: number) => string;
     upload_stalled: string;
     duplicate_ignored: string;
+    /** "Cancel" label on the inline button next to the progress message. */
+    upload_cancel_button: string;
+    /** Shown once the user clicks the cancel button and the abort lands. */
+    upload_cancelled: string;
+    /** Rejection shown when a user tries to start a new upload while the
+     *  per-user cooldown after the last completion is still active. */
+    cooldown_active: (minutes: number, seconds: number) => string;
     screenshots_caption: (n: number) => string;
     screenshots_single: string;
     screenshots_fail: (detail: string) => string;
@@ -347,6 +354,10 @@ const ar: Strings = {
     upload_stalled:
         "⚠️ الرفع توقف عن التقدّم (غالباً تحديد سرعة من تيليجرام). جرّب مرة أخرى، أو جودة أقل.",
     duplicate_ignored: "ℹ️ تم تجاهل رابط مكرر.",
+    upload_cancel_button: "❌ إلغاء العملية",
+    upload_cancelled: "🛑 تم إلغاء العملية.",
+    cooldown_active: (m, sec) =>
+        `⏳ يرجى الانتظار ${m}د ${sec}ث قبل بدء عملية جديدة (يسمح بعملية واحدة فقط في كل فترة تبريد لكل مستخدم).`,
     screenshots_caption: (n) => `🖼️ ${n} لقطات من الفيديو`,
     screenshots_single: "🖼️ لقطة من الفيديو",
     screenshots_fail: (d) => `⚠️ فشل استخراج اللقطات: <code>${d}</code>`,
@@ -550,6 +561,10 @@ const en: Strings = {
     upload_stalled:
         "⚠️ Upload stopped making progress (likely a Telegram rate-limit). Try again, or pick a lower quality.",
     duplicate_ignored: "ℹ️ Duplicate link ignored.",
+    upload_cancel_button: "❌ Cancel",
+    upload_cancelled: "🛑 Upload cancelled.",
+    cooldown_active: (m, sec) =>
+        `⏳ Please wait ${m}m ${sec}s before starting a new upload (1 upload per cooldown window per user).`,
     screenshots_caption: (n) => `🖼️ ${n} screenshots from the video`,
     screenshots_single: "🖼️ Screenshot from the video",
     screenshots_fail: (d) => `⚠️ Screenshot extraction failed: <code>${d}</code>`,
@@ -754,6 +769,10 @@ const tr: Strings = {
     upload_stalled:
         "⚠️ Yukleme ilerlemiyor (Telegram hiz siniri). Tekrar deneyin veya daha dusuk kalite secin.",
     duplicate_ignored: "ℹ️ Tekrarlanan link yok sayildi.",
+    upload_cancel_button: "❌ Iptal",
+    upload_cancelled: "🛑 Yukleme iptal edildi.",
+    cooldown_active: (m, sec) =>
+        `⏳ Yeni bir yukleme baslatmadan once ${m}d ${sec}s bekleyin (kullanici basina sogutma suresinde 1 yukleme).`,
     screenshots_caption: (n) => `🖼️ Videodan ${n} ekran goruntusu`,
     screenshots_single: "🖼️ Videodan ekran goruntusu",
     screenshots_fail: (d) => `⚠️ Ekran goruntusu cikarma basarisiz: <code>${d}</code>`,
@@ -957,6 +976,10 @@ const fr: Strings = {
     upload_stalled:
         "⚠️ L'upload n'avance plus (probablement une limite de debit Telegram). Reessayez, ou choisissez une qualite inferieure.",
     duplicate_ignored: "ℹ️ Lien en double ignore.",
+    upload_cancel_button: "❌ Annuler",
+    upload_cancelled: "🛑 Upload annule.",
+    cooldown_active: (m, sec) =>
+        `⏳ Patientez ${m}m ${sec}s avant un nouvel upload (1 upload par fenetre de refroidissement et par utilisateur).`,
     screenshots_caption: (n) => `🖼️ ${n} captures de la video`,
     screenshots_single: "🖼️ Capture de la video",
     screenshots_fail: (d) => `⚠️ Echec des captures : <code>${d}</code>`,
@@ -1160,6 +1183,10 @@ const es: Strings = {
     upload_stalled:
         "⚠️ La carga dejo de avanzar (probablemente un limite de Telegram). Reintenta, o elige una calidad menor.",
     duplicate_ignored: "ℹ️ Enlace duplicado ignorado.",
+    upload_cancel_button: "❌ Cancelar",
+    upload_cancelled: "🛑 Carga cancelada.",
+    cooldown_active: (m, sec) =>
+        `⏳ Espera ${m}m ${sec}s antes de iniciar una nueva carga (1 carga por ventana de enfriamiento por usuario).`,
     screenshots_caption: (n) => `🖼️ ${n} capturas del video`,
     screenshots_single: "🖼️ Captura del video",
     screenshots_fail: (d) => `⚠️ Fallo al extraer capturas: <code>${d}</code>`,
