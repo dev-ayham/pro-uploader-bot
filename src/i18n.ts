@@ -357,7 +357,7 @@ const ar: Strings = {
     upload_cancel_button: "❌ إلغاء العملية",
     upload_cancelled: "🛑 تم إلغاء العملية.",
     cooldown_active: (m, sec) =>
-        `⏳ يرجى الانتظار ${m}د ${sec}ث قبل بدء عملية جديدة (عملية واحدة كل 5 دقائق لكل مستخدم).`,
+        `⏳ يرجى الانتظار ${m}د ${sec}ث قبل بدء عملية جديدة (يسمح بعملية واحدة فقط في كل فترة تبريد لكل مستخدم).`,
     screenshots_caption: (n) => `🖼️ ${n} لقطات من الفيديو`,
     screenshots_single: "🖼️ لقطة من الفيديو",
     screenshots_fail: (d) => `⚠️ فشل استخراج اللقطات: <code>${d}</code>`,
@@ -564,7 +564,7 @@ const en: Strings = {
     upload_cancel_button: "❌ Cancel",
     upload_cancelled: "🛑 Upload cancelled.",
     cooldown_active: (m, sec) =>
-        `⏳ Please wait ${m}m ${sec}s before starting a new upload (1 upload per 5 minutes per user).`,
+        `⏳ Please wait ${m}m ${sec}s before starting a new upload (1 upload per cooldown window per user).`,
     screenshots_caption: (n) => `🖼️ ${n} screenshots from the video`,
     screenshots_single: "🖼️ Screenshot from the video",
     screenshots_fail: (d) => `⚠️ Screenshot extraction failed: <code>${d}</code>`,
@@ -772,7 +772,7 @@ const tr: Strings = {
     upload_cancel_button: "❌ Iptal",
     upload_cancelled: "🛑 Yukleme iptal edildi.",
     cooldown_active: (m, sec) =>
-        `⏳ Yeni bir yukleme baslatmadan once ${m}d ${sec}s bekleyin (kullanici basina 5 dakikada 1 yukleme).`,
+        `⏳ Yeni bir yukleme baslatmadan once ${m}d ${sec}s bekleyin (kullanici basina sogutma suresinde 1 yukleme).`,
     screenshots_caption: (n) => `🖼️ Videodan ${n} ekran goruntusu`,
     screenshots_single: "🖼️ Videodan ekran goruntusu",
     screenshots_fail: (d) => `⚠️ Ekran goruntusu cikarma basarisiz: <code>${d}</code>`,
@@ -979,7 +979,7 @@ const fr: Strings = {
     upload_cancel_button: "❌ Annuler",
     upload_cancelled: "🛑 Upload annule.",
     cooldown_active: (m, sec) =>
-        `⏳ Patientez ${m}m ${sec}s avant un nouvel upload (1 upload toutes les 5 minutes par utilisateur).`,
+        `⏳ Patientez ${m}m ${sec}s avant un nouvel upload (1 upload par fenetre de refroidissement et par utilisateur).`,
     screenshots_caption: (n) => `🖼️ ${n} captures de la video`,
     screenshots_single: "🖼️ Capture de la video",
     screenshots_fail: (d) => `⚠️ Echec des captures : <code>${d}</code>`,
@@ -1186,7 +1186,7 @@ const es: Strings = {
     upload_cancel_button: "❌ Cancelar",
     upload_cancelled: "🛑 Carga cancelada.",
     cooldown_active: (m, sec) =>
-        `⏳ Espera ${m}m ${sec}s antes de iniciar una nueva carga (1 carga cada 5 minutos por usuario).`,
+        `⏳ Espera ${m}m ${sec}s antes de iniciar una nueva carga (1 carga por ventana de enfriamiento por usuario).`,
     screenshots_caption: (n) => `🖼️ ${n} capturas del video`,
     screenshots_single: "🖼️ Captura del video",
     screenshots_fail: (d) => `⚠️ Fallo al extraer capturas: <code>${d}</code>`,
