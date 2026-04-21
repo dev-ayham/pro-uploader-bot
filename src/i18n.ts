@@ -1,8 +1,78 @@
 /**
  * Lightweight i18n module. Each supported locale maps to the same set of
  * string keys. Functions that accept a dynamic argument take a callback
- * so callers can do `t(lang, "downloading")(0.42)` → "📥 Downloading: 42%".
+ * so callers can do `t(lang, "downloading")(info)` → a multi-line block
+ * with percent, bar, bytes, speed, and ETA.
  */
+
+import {
+    formatBytes,
+    formatEta,
+    formatSpeed,
+    renderBar,
+    RichProgress,
+} from "./services/progress";
+
+/**
+ * Payload accepted by the `downloading` / `uploading` / `ai_audio_uploading`
+ * locale strings. Only `fraction` is required; the rest are included when
+ * available (for direct HTTP downloads we know bytes + speed; for the
+ * external-URL fast path we only know `fraction` 0 or 1). Locales degrade
+ * gracefully — rows whose data is missing are simply omitted.
+ */
+export type ProgressInfo = RichProgress;
+
+/**
+ * Locale-specific labels fed into {@link buildProgressBlock} so the helper
+ * can centralise the multi-line format without duplicating it 5 × 3 times.
+ */
+interface ProgressLabels {
+    speed: string;
+    eta: string;
+}
+
+/**
+ * Format a rich progress tick as the multi-line block the user asked for
+ * in the v38 redesign:
+ *
+ *   📥 Downloading: 53.79%
+ *   [▓▓▓▓▓▓░░░░]
+ *   1012.55 MB / 1.84 GB
+ *   Speed: 13.12 MB/s
+ *   ETA: 1m 7s
+ *
+ * Rows for bytes / speed / ETA are omitted when the underlying download /
+ * upload layer could not produce them (e.g. chunked transfer encoding
+ * without Content-Length, first 250 ms before the first speed sample).
+ */
+function buildProgressBlock(
+    heading: string,
+    info: ProgressInfo,
+    labels: ProgressLabels,
+): string {
+    const pctNum = Math.max(0, Math.min(1, info.fraction)) * 100;
+    // 2 decimals for fractional progress to match the reference
+    // screenshot; integer for the clean 100% final state so the user sees
+    // "100%" not "100.00%".
+    const pct = pctNum >= 100 ? "100" : pctNum.toFixed(2);
+    const lines = [`${heading}: ${pct}%`, renderBar(info.fraction)];
+    if (
+        typeof info.doneBytes === "number" &&
+        typeof info.totalBytes === "number" &&
+        info.totalBytes > 0
+    ) {
+        lines.push(
+            `${formatBytes(info.doneBytes)} / ${formatBytes(info.totalBytes)}`,
+        );
+    }
+    if (typeof info.speedBps === "number" && info.speedBps > 0) {
+        lines.push(`${labels.speed}: ${formatSpeed(info.speedBps)}`);
+    }
+    if (typeof info.etaSec === "number" && info.etaSec > 0) {
+        lines.push(`${labels.eta}: ${formatEta(info.etaSec)}`);
+    }
+    return lines.join("\n");
+}
 
 export type Lang = "ar" | "en" | "tr" | "fr" | "es";
 
@@ -84,8 +154,8 @@ interface Strings {
     // Upload flow
     processing: string;
     extracting: string;
-    downloading: (p: number) => string;
-    uploading: (p: number) => string;
+    downloading: (p: ProgressInfo) => string;
+    uploading: (p: ProgressInfo) => string;
     success: string;
     error: string;
     invalid_url: string;
@@ -142,7 +212,7 @@ interface Strings {
     ai_daily_limit: (limit: number) => string;
     ai_intent_unknown: string;
     ai_audio_extracting: string;
-    ai_audio_uploading: (p: number) => string;
+    ai_audio_uploading: (p: ProgressInfo) => string;
     ai_audio_success: string;
     ai_audio_error: (detail: string) => string;
     ai_retrying: string;
@@ -250,8 +320,16 @@ const ar: Strings = {
 
     processing: "⏳ جاري المعالجة...",
     extracting: "🔍 جاري استخراج الفيديو...",
-    downloading: (p) => `📥 جاري التحميل: ${Math.round(p * 100)}%`,
-    uploading: (p) => `📤 جاري الرفع: ${Math.round(p * 100)}%`,
+    downloading: (p) =>
+        buildProgressBlock("📥 جاري التحميل", p, {
+            speed: "السرعة",
+            eta: "المتبقي",
+        }),
+    uploading: (p) =>
+        buildProgressBlock("📤 جاري الرفع", p, {
+            speed: "السرعة",
+            eta: "المتبقي",
+        }),
     success: "✅ تم الرفع بنجاح!",
     error: "❌ حدث خطأ أثناء الرفع.",
     invalid_url: "⚠️ لم أجد رابطاً صالحاً في الرسالة.",
@@ -335,7 +413,11 @@ const ar: Strings = {
     ai_intent_unknown:
         "🤖 لم أفهم طلبك. جرّب أن تكتب: «بدي ياه صوت» أو «كملف» أو «كفيديو» أو «أعد المحاولة».",
     ai_audio_extracting: "🎵 جاري استخراج الصوت...",
-    ai_audio_uploading: (p) => `📤 رفع الصوت: ${Math.round(p * 100)}%`,
+    ai_audio_uploading: (p) =>
+        buildProgressBlock("📤 رفع الصوت", p, {
+            speed: "السرعة",
+            eta: "المتبقي",
+        }),
     ai_audio_success: "✅ تم رفع الصوت بنجاح!",
     ai_audio_error: (d) => `❌ فشل استخراج الصوت: <code>${d}</code>`,
     ai_retrying: "🔄 إعادة المحاولة على الرابط السابق...",
@@ -441,8 +523,16 @@ const en: Strings = {
 
     processing: "⏳ Processing...",
     extracting: "🔍 Extracting video...",
-    downloading: (p) => `📥 Downloading: ${Math.round(p * 100)}%`,
-    uploading: (p) => `📤 Uploading: ${Math.round(p * 100)}%`,
+    downloading: (p) =>
+        buildProgressBlock("📥 Downloading", p, {
+            speed: "Speed",
+            eta: "ETA",
+        }),
+    uploading: (p) =>
+        buildProgressBlock("📤 Uploading", p, {
+            speed: "Speed",
+            eta: "ETA",
+        }),
     success: "✅ Upload complete!",
     error: "❌ Upload failed.",
     invalid_url: "⚠️ No valid URL found in your message.",
@@ -527,7 +617,11 @@ Clear: <code>/suffix clear</code>`,
     ai_intent_unknown:
         "🤖 I didn't understand. Try: 'audio' / 'as document' / 'as video' / 'retry'.",
     ai_audio_extracting: "🎵 Extracting audio...",
-    ai_audio_uploading: (p) => `📤 Uploading audio: ${Math.round(p * 100)}%`,
+    ai_audio_uploading: (p) =>
+        buildProgressBlock("📤 Uploading audio", p, {
+            speed: "Speed",
+            eta: "ETA",
+        }),
     ai_audio_success: "✅ Audio uploaded!",
     ai_audio_error: (d) => `❌ Audio extraction failed: <code>${d}</code>`,
     ai_retrying: "🔄 Retrying the previous URL...",
@@ -633,8 +727,16 @@ const tr: Strings = {
 
     processing: "⏳ Isleniyor...",
     extracting: "🔍 Video cikariliyor...",
-    downloading: (p) => `📥 Indiriliyor: ${Math.round(p * 100)}%`,
-    uploading: (p) => `📤 Yukleniyor: ${Math.round(p * 100)}%`,
+    downloading: (p) =>
+        buildProgressBlock("📥 Indiriliyor", p, {
+            speed: "Hiz",
+            eta: "Kalan",
+        }),
+    uploading: (p) =>
+        buildProgressBlock("📤 Yukleniyor", p, {
+            speed: "Hiz",
+            eta: "Kalan",
+        }),
     success: "✅ Yukleme tamamlandi!",
     error: "❌ Yukleme basarisiz.",
     invalid_url: "⚠️ Mesajinizda gecerli bir URL bulunamadi.",
@@ -719,7 +821,11 @@ Temizle: <code>/suffix clear</code>`,
     ai_intent_unknown:
         "🤖 Anlamadım. Şunları deneyin: 'ses' / 'belge olarak' / 'video olarak' / 'tekrar dene'.",
     ai_audio_extracting: "🎵 Ses çıkarılıyor...",
-    ai_audio_uploading: (p) => `📤 Ses yükleniyor: ${Math.round(p * 100)}%`,
+    ai_audio_uploading: (p) =>
+        buildProgressBlock("📤 Ses yükleniyor", p, {
+            speed: "Hiz",
+            eta: "Kalan",
+        }),
     ai_audio_success: "✅ Ses yüklendi!",
     ai_audio_error: (d) => `❌ Ses çıkarılamadı: <code>${d}</code>`,
     ai_retrying: "🔄 Önceki URL yeniden deneniyor...",
@@ -824,8 +930,16 @@ const fr: Strings = {
 
     processing: "⏳ Traitement...",
     extracting: "🔍 Extraction video...",
-    downloading: (p) => `📥 Telechargement : ${Math.round(p * 100)}%`,
-    uploading: (p) => `📤 Upload : ${Math.round(p * 100)}%`,
+    downloading: (p) =>
+        buildProgressBlock("📥 Telechargement", p, {
+            speed: "Vitesse",
+            eta: "Restant",
+        }),
+    uploading: (p) =>
+        buildProgressBlock("📤 Upload", p, {
+            speed: "Vitesse",
+            eta: "Restant",
+        }),
     success: "✅ Upload termine !",
     error: "❌ Erreur lors de l'upload.",
     invalid_url: "⚠️ Aucun URL valide trouve.",
@@ -910,7 +1024,11 @@ Effacer: <code>/suffix clear</code>`,
     ai_intent_unknown:
         "🤖 Je n'ai pas compris. Essayez : 'audio' / 'en document' / 'en vidéo' / 'réessayer'.",
     ai_audio_extracting: "🎵 Extraction de l'audio...",
-    ai_audio_uploading: (p) => `📤 Envoi audio : ${Math.round(p * 100)}%`,
+    ai_audio_uploading: (p) =>
+        buildProgressBlock("📤 Envoi audio", p, {
+            speed: "Vitesse",
+            eta: "Restant",
+        }),
     ai_audio_success: "✅ Audio envoyé !",
     ai_audio_error: (d) => `❌ Échec de l'extraction audio : <code>${d}</code>`,
     ai_retrying: "🔄 Nouvelle tentative sur l'URL précédente...",
@@ -1015,8 +1133,16 @@ const es: Strings = {
 
     processing: "⏳ Procesando...",
     extracting: "🔍 Extrayendo video...",
-    downloading: (p) => `📥 Descargando: ${Math.round(p * 100)}%`,
-    uploading: (p) => `📤 Subiendo: ${Math.round(p * 100)}%`,
+    downloading: (p) =>
+        buildProgressBlock("📥 Descargando", p, {
+            speed: "Velocidad",
+            eta: "Restante",
+        }),
+    uploading: (p) =>
+        buildProgressBlock("📤 Subiendo", p, {
+            speed: "Velocidad",
+            eta: "Restante",
+        }),
     success: "✅ Carga completada!",
     error: "❌ Error en la carga.",
     invalid_url: "⚠️ No se encontro un URL valido.",
@@ -1101,7 +1227,11 @@ Borrar: <code>/suffix clear</code>`,
     ai_intent_unknown:
         "🤖 No te entendí. Prueba: 'audio' / 'como documento' / 'como video' / 'reintentar'.",
     ai_audio_extracting: "🎵 Extrayendo audio...",
-    ai_audio_uploading: (p) => `📤 Subiendo audio: ${Math.round(p * 100)}%`,
+    ai_audio_uploading: (p) =>
+        buildProgressBlock("📤 Subiendo audio", p, {
+            speed: "Velocidad",
+            eta: "Restante",
+        }),
     ai_audio_success: "✅ ¡Audio subido!",
     ai_audio_error: (d) => `❌ Fallo al extraer audio: <code>${d}</code>`,
     ai_retrying: "🔄 Reintentando la URL anterior...",

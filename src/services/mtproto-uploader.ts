@@ -17,6 +17,7 @@ import {
     YtDlpOptions,
 } from "./downloader";
 import { resolveDataDir } from "./db";
+import { createRateTracker, RichProgress } from "./progress";
 
 const TEMP_DIR = "/tmp";
 
@@ -62,6 +63,37 @@ function workersFor(size: number): number {
     if (size <= 1024 * 1024 * 1024)
         return Math.min(max, Math.max(1, Math.floor(max / 2)));
     return Math.min(max, Math.max(1, Math.floor(max / 4)));
+}
+
+/**
+ * Adapter from a GramJS fraction-only progress callback to the bot's rich
+ * {@link UploadProgress} stream. Given the known `totalBytes` of the file
+ * being uploaded (from `fs.stat`) we can recover a smoothed speed / ETA
+ * via {@link createRateTracker} even though Telegram's own progress API
+ * emits only a normalised [0, 1] fraction.
+ */
+function makeUploadEmitter(
+    totalBytes: number,
+    onProgress: ((progress: UploadProgress) => void) | undefined,
+): (fraction: number) => void {
+    if (!onProgress) {
+        return () => {
+            // No subscriber — skip the bookkeeping entirely.
+        };
+    }
+    const tracker = createRateTracker();
+    return (fraction: number) => {
+        const clamped = Math.min(1, Math.max(0, fraction));
+        const doneBytes = Math.round(clamped * totalBytes);
+        const rich = tracker(doneBytes, totalBytes);
+        onProgress({
+            phase: "upload",
+            ...rich,
+            // Use the caller-supplied fraction verbatim so we never round
+            // the final 1.0 tick down to 0.999 because of byte math.
+            fraction: clamped,
+        });
+    };
 }
 
 /**
@@ -153,9 +185,8 @@ const EXTERNAL_URL_TIMEOUT_MS = (() => {
     return Number.isFinite(n) && n > 0 ? n : 20_000;
 })();
 
-export interface UploadProgress {
+export interface UploadProgress extends RichProgress {
     phase: "download" | "upload";
-    fraction: number;
 }
 
 export interface UploadOptions {
@@ -366,8 +397,8 @@ export class MTProtoUploader {
                 downloaded = await downloadWithYtDlp(
                     url,
                     TEMP_DIR,
-                    (fraction) => {
-                        onProgress?.({ phase: "download", fraction });
+                    (rich) => {
+                        onProgress?.({ phase: "download", ...rich });
                     },
                     // Merge per-call overrides (max height) on top of the
                     // instance-wide cookies / user-agent / size-cap defaults.
@@ -380,8 +411,10 @@ export class MTProtoUploader {
                 // case.
                 downloaded = await downloadDirect(url, TEMP_DIR, {
                     maxFileSizeMb: this.ytDlpOptions.maxFileSizeMb,
+                    onProgress: (rich) => {
+                        onProgress?.({ phase: "download", ...rich });
+                    },
                 });
-                onProgress?.({ phase: "download", fraction: 1 });
             }
 
             const stats = fs.statSync(downloaded.filePath);
@@ -415,8 +448,7 @@ export class MTProtoUploader {
                 );
             } else {
                 await withStallGuard(
-                    (fraction) =>
-                        onProgress?.({ phase: "upload", fraction }),
+                    makeUploadEmitter(stats.size, onProgress),
                     (progressCb) =>
                         this.client.sendFile(chatId, {
                             file: toUpload,
@@ -474,8 +506,8 @@ export class MTProtoUploader {
             downloaded = await downloadAudioWithYtDlp(
                 url,
                 TEMP_DIR,
-                (fraction) => {
-                    onProgress?.({ phase: "download", fraction });
+                (rich) => {
+                    onProgress?.({ phase: "download", ...rich });
                 },
                 this.ytDlpOptions,
             );
@@ -496,7 +528,7 @@ export class MTProtoUploader {
             // attribute so Telegram renders the inline player rather than a
             // generic document tile.
             await withStallGuard(
-                (fraction) => onProgress?.({ phase: "upload", fraction }),
+                makeUploadEmitter(stats.size, onProgress),
                 (progressCb) =>
                     this.client.sendFile(chatId, {
                         file: toUpload,
@@ -701,7 +733,7 @@ export class MTProtoUploader {
             (mime.lookup(filename) as string) || "application/octet-stream";
 
         const uploadedFile = await withStallGuard(
-            (fraction) => onProgress?.({ phase: "upload", fraction }),
+            makeUploadEmitter(file.size, onProgress),
             (progressCb) =>
                 this.client.uploadFile({
                     file,

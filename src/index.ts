@@ -445,10 +445,14 @@ async function runUpload(
             }
         };
 
-        let lastBucket: { phase: string; bucket: number } = {
-            phase: "",
-            bucket: -1,
-        };
+        // Status-message refresh throttle. The download / upload layers now
+        // emit 4+ ticks / second with rich bytes-speed-ETA telemetry; we
+        // refresh the status message at most once every 1.5 s (plus an
+        // immediate refresh on phase change) so Telegram's edit-rate limit
+        // never bites while the user still sees a responsive display.
+        let lastEditTs = 0;
+        let lastPhase = "";
+        const MIN_EDIT_INTERVAL_MS = 1500;
 
         // Honour the user's saved toggles. For AI intents we *override*
         // the document/video flag for this single upload without
@@ -463,22 +467,26 @@ async function runUpload(
                 : prefs.uploadAsDocument;
 
         const onProgress = async (progress: UploadProgress) => {
-            const bucket = Math.min(4, Math.floor(progress.fraction * 5));
+            const now = Date.now();
+            const phaseChanged = progress.phase !== lastPhase;
+            const isTerminal = progress.fraction >= 1;
             if (
-                progress.phase === lastBucket.phase &&
-                bucket === lastBucket.bucket
+                !phaseChanged &&
+                !isTerminal &&
+                now - lastEditTs < MIN_EDIT_INTERVAL_MS
             ) {
                 return;
             }
-            lastBucket = { phase: progress.phase, bucket };
+            lastEditTs = now;
+            lastPhase = progress.phase;
             const text =
                 mode === "audio"
                     ? progress.phase === "download"
                         ? s.ai_audio_extracting
-                        : s.ai_audio_uploading(progress.fraction)
+                        : s.ai_audio_uploading(progress)
                     : progress.phase === "download"
-                    ? s.downloading(progress.fraction)
-                    : s.uploading(progress.fraction);
+                    ? s.downloading(progress)
+                    : s.uploading(progress);
             await editStatus(text);
         };
 
