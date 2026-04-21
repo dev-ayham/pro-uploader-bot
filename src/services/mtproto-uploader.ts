@@ -205,6 +205,14 @@ export interface UploadOptions {
     /** String to append to the visible filename before the extension. */
     renameSuffix?: string;
     /**
+     * One-off filename override supplied by the user inline with the URL
+     * (e.g. `https://.../video.mp4 | my_movie`). When set this replaces the
+     * base name coming from the downloader. The extension from the
+     * downloaded file is preserved unless the override itself already
+     * contains one. `renamePrefix` / `renameSuffix` still wrap it.
+     */
+    customFilename?: string;
+    /**
      * Cap the selected video stream height (e.g. 720 for "720p or lower").
      * Forwarded to yt-dlp's format selector. Ignored for direct-download
      * URLs (there's nothing to transcode on our side).
@@ -271,6 +279,25 @@ export function applyRename(
     const base = hasExt ? original.slice(0, dot) : original;
     const ext = hasExt ? original.slice(dot) : "";
     return `${prefix ?? ""}${base}${suffix ?? ""}${ext}`;
+}
+
+/**
+ * Swap `original`'s base name for the user-provided `customName` while
+ * keeping the extension. If `customName` already contains its own
+ * extension it's taken as-is; otherwise the extension is copied from
+ * `original` so Telegram keeps the right mime type.
+ */
+export function applyCustomFilename(
+    original: string,
+    customName: string,
+): string {
+    const trimmed = customName.trim();
+    if (!trimmed) return original;
+    const customHasExt = /\.[A-Za-z0-9]{1,6}$/.test(trimmed);
+    if (customHasExt) return trimmed;
+    const dot = original.lastIndexOf(".");
+    const ext = dot > 0 && dot < original.length - 1 ? original.slice(dot) : "";
+    return `${trimmed}${ext}`;
 }
 
 /**
@@ -403,6 +430,7 @@ export class MTProtoUploader {
             !options.thumbnailPath &&
             !options.renamePrefix &&
             !options.renameSuffix &&
+            !options.customFilename &&
             !looksLikeVideoUrl(url);
         if (canUseExternal) {
             onProgress?.({ phase: "upload", fraction: 0 });
@@ -469,9 +497,14 @@ export class MTProtoUploader {
             const stats = fs.statSync(downloaded.filePath);
             // Apply the user's rename prefix/suffix to the *visible* filename
             // only. We never rename the file on disk — it's deleted in the
-            // finally a few lines down.
+            // finally a few lines down. If the user supplied an inline
+            // `URL | my_name` override, it swaps the base name in first so
+            // prefix/suffix still wrap the custom name.
+            const baseForRename = options.customFilename
+                ? applyCustomFilename(downloaded.filename, options.customFilename)
+                : downloaded.filename;
             const visibleName = applyRename(
-                downloaded.filename,
+                baseForRename,
                 options.renamePrefix,
                 options.renameSuffix,
             );
@@ -620,7 +653,7 @@ export class MTProtoUploader {
         onProgress?: (progress: UploadProgress) => void,
         options: Pick<
             UploadOptions,
-            "renamePrefix" | "renameSuffix" | "signal"
+            "renamePrefix" | "renameSuffix" | "customFilename" | "signal"
         > = {},
     ): Promise<void> {
         await this.readyPromise;
@@ -637,8 +670,11 @@ export class MTProtoUploader {
             );
 
             const stats = fs.statSync(downloaded.filePath);
+            const audioBaseName = options.customFilename
+                ? applyCustomFilename(downloaded.filename, options.customFilename)
+                : downloaded.filename;
             const visibleName = applyRename(
-                downloaded.filename,
+                audioBaseName,
                 options.renamePrefix,
                 options.renameSuffix,
             );
