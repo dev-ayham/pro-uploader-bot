@@ -171,8 +171,14 @@ interface Strings {
     /** Shown once the user clicks the cancel button and the abort lands. */
     upload_cancelled: string;
     /** Rejection shown when a user tries to start a new upload while the
-     *  per-user cooldown after the last completion is still active. */
+     *  per-user cooldown after the last completion is still active. This
+     *  message is edited in place every ~10 seconds with the decreasing
+     *  countdown so the user sees it tick down rather than a static time. */
     cooldown_active: (minutes: number, seconds: number) => string;
+    /** Final state of the cooldown message once the window elapses —
+     *  edited in place over `cooldown_active` so the user knows they
+     *  can send a new task now. */
+    cooldown_ready: string;
     screenshots_caption: (n: number) => string;
     screenshots_single: string;
     screenshots_fail: (detail: string) => string;
@@ -358,6 +364,7 @@ const ar: Strings = {
     upload_cancelled: "🛑 تم إلغاء العملية.",
     cooldown_active: (m, sec) =>
         `⏳ يرجى الانتظار ${m}د ${sec}ث قبل بدء عملية جديدة (يسمح بعملية واحدة فقط في كل فترة تبريد لكل مستخدم).`,
+    cooldown_ready: "✅ يمكنك الآن إرسال عملية جديدة.",
     screenshots_caption: (n) => `🖼️ ${n} لقطات من الفيديو`,
     screenshots_single: "🖼️ لقطة من الفيديو",
     screenshots_fail: (d) => `⚠️ فشل استخراج اللقطات: <code>${d}</code>`,
@@ -565,6 +572,7 @@ const en: Strings = {
     upload_cancelled: "🛑 Upload cancelled.",
     cooldown_active: (m, sec) =>
         `⏳ Please wait ${m}m ${sec}s before starting a new upload (1 upload per cooldown window per user).`,
+    cooldown_ready: "✅ You can send a new task now.",
     screenshots_caption: (n) => `🖼️ ${n} screenshots from the video`,
     screenshots_single: "🖼️ Screenshot from the video",
     screenshots_fail: (d) => `⚠️ Screenshot extraction failed: <code>${d}</code>`,
@@ -773,6 +781,7 @@ const tr: Strings = {
     upload_cancelled: "🛑 Yukleme iptal edildi.",
     cooldown_active: (m, sec) =>
         `⏳ Yeni bir yukleme baslatmadan once ${m}d ${sec}s bekleyin (kullanici basina sogutma suresinde 1 yukleme).`,
+    cooldown_ready: "✅ Artik yeni bir gorev gonderebilirsiniz.",
     screenshots_caption: (n) => `🖼️ Videodan ${n} ekran goruntusu`,
     screenshots_single: "🖼️ Videodan ekran goruntusu",
     screenshots_fail: (d) => `⚠️ Ekran goruntusu cikarma basarisiz: <code>${d}</code>`,
@@ -980,6 +989,7 @@ const fr: Strings = {
     upload_cancelled: "🛑 Upload annule.",
     cooldown_active: (m, sec) =>
         `⏳ Patientez ${m}m ${sec}s avant un nouvel upload (1 upload par fenetre de refroidissement et par utilisateur).`,
+    cooldown_ready: "✅ Vous pouvez envoyer une nouvelle tache maintenant.",
     screenshots_caption: (n) => `🖼️ ${n} captures de la video`,
     screenshots_single: "🖼️ Capture de la video",
     screenshots_fail: (d) => `⚠️ Echec des captures : <code>${d}</code>`,
@@ -1187,6 +1197,7 @@ const es: Strings = {
     upload_cancelled: "🛑 Carga cancelada.",
     cooldown_active: (m, sec) =>
         `⏳ Espera ${m}m ${sec}s antes de iniciar una nueva carga (1 carga por ventana de enfriamiento por usuario).`,
+    cooldown_ready: "✅ Ya puedes enviar una nueva tarea.",
     screenshots_caption: (n) => `🖼️ ${n} capturas del video`,
     screenshots_single: "🖼️ Captura del video",
     screenshots_fail: (d) => `⚠️ Fallo al extraer capturas: <code>${d}</code>`,

@@ -471,6 +471,89 @@ const AI_DAILY_LIMIT = parseInt(
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-nano";
 
 /**
+ * Send the cooldown-rejection message and then keep editing it in place
+ * with a live-ticking countdown (minutes + seconds remaining) so the
+ * user sees the number decrease rather than a static snapshot. Matches
+ * the competitor bots' UX.
+ *
+ * The tick interval is 10s which gives 30 edits over a full 5-minute
+ * cooldown — well under Telegram's "1 edit / sec per chat" rate limit.
+ * We stop editing on first error that looks like the message was
+ * deleted or the bot was blocked, so a long cooldown for a user who
+ * cleared the chat doesn't keep hammering the API.
+ */
+const COOLDOWN_COUNTDOWN_TICK_MS = 10_000;
+async function sendCooldownCountdown(
+    ctx: Context,
+    chatId: number,
+    cooldownUntil: number,
+    s: ReturnType<typeof t>,
+): Promise<void> {
+    const fmt = (ms: number) => {
+        const totalSec = Math.max(0, Math.ceil(ms / 1000));
+        return {
+            minutes: Math.floor(totalSec / 60),
+            seconds: totalSec % 60,
+        };
+    };
+    const initial = fmt(cooldownUntil - Date.now());
+    let sent: { message_id: number } | undefined;
+    try {
+        sent = await ctx.reply(s.cooldown_active(initial.minutes, initial.seconds));
+    } catch (err) {
+        console.error("Failed to send cooldown message:", err);
+        return;
+    }
+    if (!sent) return;
+    const messageId = sent.message_id;
+
+    const api = ctx.api;
+    const interval = setInterval(async () => {
+        const remaining = cooldownUntil - Date.now();
+        if (remaining <= 0) {
+            clearInterval(interval);
+            try {
+                await api.editMessageText(chatId, messageId, s.cooldown_ready);
+            } catch {
+                // Message likely gone; nothing to do.
+            }
+            return;
+        }
+        const { minutes, seconds } = fmt(remaining);
+        try {
+            await api.editMessageText(
+                chatId,
+                messageId,
+                s.cooldown_active(minutes, seconds),
+            );
+        } catch (err) {
+            const description = String(
+                (err as { description?: string })?.description ?? err ?? "",
+            );
+            // "message is not modified" means the formatted text happened
+            // to land identical — harmless, keep ticking.
+            if (/not modified/i.test(description)) return;
+            // Permanent failures: message deleted, bot blocked, etc. Stop
+            // re-editing.
+            if (
+                /message to edit not found|message can't be edited|bot was blocked|chat not found|user is deactivated|forbidden/i.test(
+                    description,
+                )
+            ) {
+                clearInterval(interval);
+            }
+        }
+    }, COOLDOWN_COUNTDOWN_TICK_MS);
+    // Hard safety net: never let an interval outlive the cooldown window by
+    // more than 30 seconds, even if the tick handler somehow fails to
+    // clear itself.
+    setTimeout(
+        () => clearInterval(interval),
+        Math.max(cooldownUntil - Date.now() + 30_000, 60_000),
+    );
+}
+
+/**
  * Shared upload pipeline used by both the URL-in-message path and the AI
  * intent-dispatch path. Owns the "processing..." status message, the
  * progress callback, the in-flight guard and the post-upload bookkeeping
@@ -498,10 +581,7 @@ async function runUpload(
     const cooldownUntil = chatCooldownUntil.get(chatId) ?? 0;
     const remainingMs = cooldownUntil - Date.now();
     if (remainingMs > 0) {
-        const totalSec = Math.ceil(remainingMs / 1000);
-        const minutes = Math.floor(totalSec / 60);
-        const seconds = totalSec % 60;
-        await ctx.reply(s.cooldown_active(minutes, seconds));
+        await sendCooldownCountdown(ctx, chatId, cooldownUntil, s);
         return false;
     }
 
