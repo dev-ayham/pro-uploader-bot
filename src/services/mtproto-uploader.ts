@@ -81,14 +81,14 @@ function workersFor(size: number): number {
 function makeUploadEmitter(
     totalBytes: number,
     onProgress: ((progress: UploadProgress) => void) | undefined,
+    signal?: AbortSignal,
 ): (fraction: number) => void {
-    if (!onProgress) {
-        return () => {
-            // No subscriber — skip the bookkeeping entirely.
-        };
-    }
-    const tracker = createRateTracker();
+    const tracker = onProgress ? createRateTracker() : null;
     return (fraction: number) => {
+        // Fail fast on cancellation so GramJS unwinds sendFile and the
+        // caller's finally releases the chat's concurrency slot.
+        if (signal?.aborted) throw new UploadCancelledError();
+        if (!onProgress || !tracker) return;
         const clamped = Math.min(1, Math.max(0, fraction));
         const doneBytes = Math.round(clamped * totalBytes);
         const rich = tracker(doneBytes, totalBytes);
@@ -232,6 +232,26 @@ export interface UploadOptions {
      * fast path (no file is downloaded there).
      */
     captionFromFilename?: (filename: string) => string;
+    /**
+     * Optional AbortSignal for user-initiated cancellation (the "Cancel"
+     * button on the progress message). When aborted, the current
+     * download is interrupted and the upload's progress callback
+     * throws an {@link UploadCancelledError} on the next tick, which
+     * unwinds `sendFile` and releases the concurrency slot.
+     */
+    signal?: AbortSignal;
+}
+
+/**
+ * Thrown by the progress callback when the caller's AbortSignal fires
+ * mid-upload so GramJS unwinds `sendFile` promptly rather than draining
+ * the remaining chunks.
+ */
+export class UploadCancelledError extends Error {
+    constructor() {
+        super("Upload cancelled");
+        this.name = "UploadCancelledError";
+    }
 }
 
 /**
@@ -426,7 +446,11 @@ export class MTProtoUploader {
                     },
                     // Merge per-call overrides (max height) on top of the
                     // instance-wide cookies / user-agent / size-cap defaults.
-                    { ...this.ytDlpOptions, maxHeight: options.maxHeight },
+                    {
+                        ...this.ytDlpOptions,
+                        maxHeight: options.maxHeight,
+                        signal: options.signal,
+                    },
                 );
             } else {
                 // Plain direct URL (.mp4, .pdf, ...). yt-dlp's generic
@@ -438,6 +462,7 @@ export class MTProtoUploader {
                     onProgress: (rich) => {
                         onProgress?.({ phase: "download", ...rich });
                     },
+                    signal: options.signal,
                 });
             }
 
@@ -469,6 +494,7 @@ export class MTProtoUploader {
                     options.asDocument === true,
                     onProgress,
                     options.thumbnailPath,
+                    options.signal,
                 );
             } else {
                 // Produce a Telegram-native "video" tile (with playable
@@ -526,7 +552,11 @@ export class MTProtoUploader {
                     : caption;
                 try {
                     await withStallGuard(
-                        makeUploadEmitter(stats.size, onProgress),
+                        makeUploadEmitter(
+                            stats.size,
+                            onProgress,
+                            options.signal,
+                        ),
                         (progressCb) =>
                             this.client.sendFile(chatId, {
                                 file: toUpload,
@@ -588,7 +618,10 @@ export class MTProtoUploader {
         url: string,
         caption: string,
         onProgress?: (progress: UploadProgress) => void,
-        options: Pick<UploadOptions, "renamePrefix" | "renameSuffix"> = {},
+        options: Pick<
+            UploadOptions,
+            "renamePrefix" | "renameSuffix" | "signal"
+        > = {},
     ): Promise<void> {
         await this.readyPromise;
 
@@ -600,7 +633,7 @@ export class MTProtoUploader {
                 (rich) => {
                     onProgress?.({ phase: "download", ...rich });
                 },
-                this.ytDlpOptions,
+                { ...this.ytDlpOptions, signal: options.signal },
             );
 
             const stats = fs.statSync(downloaded.filePath);
@@ -619,7 +652,7 @@ export class MTProtoUploader {
             // attribute so Telegram renders the inline player rather than a
             // generic document tile.
             await withStallGuard(
-                makeUploadEmitter(stats.size, onProgress),
+                makeUploadEmitter(stats.size, onProgress, options.signal),
                 (progressCb) =>
                     this.client.sendFile(chatId, {
                         file: toUpload,
@@ -819,12 +852,13 @@ export class MTProtoUploader {
         forceFile: boolean,
         onProgress?: (progress: UploadProgress) => void,
         thumbnailPath?: string,
+        signal?: AbortSignal,
     ): Promise<void> {
         const mimeType =
             (mime.lookup(filename) as string) || "application/octet-stream";
 
         const uploadedFile = await withStallGuard(
-            makeUploadEmitter(file.size, onProgress),
+            makeUploadEmitter(file.size, onProgress, signal),
             (progressCb) =>
                 this.client.uploadFile({
                     file,

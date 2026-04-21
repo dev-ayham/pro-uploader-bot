@@ -22,6 +22,7 @@ export type IntentAction =
     | "document"
     | "video"
     | "retry"
+    | "cancel"
     | "unknown";
 
 export interface Intent {
@@ -58,6 +59,56 @@ function normalise(s: string): string {
  * "retry".
  */
 const KEYWORDS: Array<{ action: IntentAction; phrases: string[] }> = [
+    {
+        // Checked first so phrases like "الغي العمليتين" / "stop it" /
+        // "ايقاف" never get misclassified as "retry" or fall through to
+        // the OpenAI fallback where the model has been observed to
+        // guess "retry" and kick off a brand-new (expensive) upload.
+        action: "cancel",
+        phrases: [
+            // Arabic
+            "الغ",
+            "الغي",
+            "الغاء",
+            "إلغاء",
+            "الغي العمليه",
+            "الغي العمليات",
+            "الغي العمليتين",
+            "ايقاف",
+            "إيقاف",
+            "ايقافهم",
+            "ايقافها",
+            "ايقافه",
+            "اوقف",
+            "أوقف",
+            "توقف",
+            "وقف",
+            "بطل",
+            "بطله",
+            "كنسل",
+            // English
+            "cancel",
+            "stop",
+            "abort",
+            "kill it",
+            "stop it",
+            // Turkish
+            "iptal",
+            "durdur",
+            // French
+            "annule",
+            "annuler",
+            "arrete",
+            "arrêter",
+            "stoppe",
+            // Spanish
+            "cancela",
+            "cancelar",
+            "detener",
+            "parar",
+            "para",
+        ],
+    },
     {
         action: "audio",
         phrases: [
@@ -275,7 +326,7 @@ export async function parseIntentWithOpenAI(
                         // schema is enforced by response_format so we
                         // don't need to describe it at length.
                         content:
-                            'Classify the user message into one action. Reply ONLY with JSON {"action":"audio"|"document"|"video"|"retry"|"unknown"}. audio=get sound/mp3. document=as file. video=as video. retry=try again.',
+                            'Classify the user message into one action. Reply ONLY with JSON {"action":"audio"|"document"|"video"|"retry"|"cancel"|"unknown"}. audio=get sound/mp3. document=as file. video=as video. retry=try again. cancel=stop/abort the current upload.',
                     },
                     {
                         role: "user",
@@ -451,6 +502,7 @@ function tryParseActionJson(raw: string): IntentAction {
             case "document":
             case "video":
             case "retry":
+            case "cancel":
                 return obj.action;
             default:
                 return "unknown";

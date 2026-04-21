@@ -316,17 +316,23 @@ export interface DownloadResult {
 export async function downloadDirect(
     url: string,
     destDir: string,
-    options: { maxFileSizeMb?: number; onProgress?: DownloadProgress } = {},
+    options: {
+        maxFileSizeMb?: number;
+        onProgress?: DownloadProgress;
+        signal?: AbortSignal;
+    } = {},
 ): Promise<DownloadResult> {
     const parsedUrl = new URL(url);
     const filename =
         path.basename(parsedUrl.pathname).split("?")[0] || `file_${Date.now()}`;
     const filePath = path.join(destDir, `${Date.now()}_${filename}`);
 
+    if (options.signal?.aborted) throw new DownloadCancelledError();
     const response = await axios({
         url,
         method: "GET",
         responseType: "stream",
+        signal: options.signal,
     });
 
     // Server-advertised size check. Not all servers return Content-Length
@@ -357,7 +363,20 @@ export async function downloadDirect(
     // would otherwise hang forever and leak the chat's concurrency slot.
     let received = 0;
     let sizeExceeded = false;
+    let cancelled = false;
     const sizeLimitError = new Error("__file_too_large__");
+    const cancelError = new Error("__cancelled__");
+
+    // Propagate a user-initiated cancellation mid-stream: tear down the
+    // HTTP response and the on-disk writer so the caller's await
+    // resolves quickly with a clear error rather than blocking on a
+    // request that no one is listening to any more.
+    const onAbort = () => {
+        cancelled = true;
+        try { response.data.destroy?.(cancelError); } catch { /* */ }
+        try { writer.destroy(cancelError); } catch { /* */ }
+    };
+    options.signal?.addEventListener("abort", onAbort, { once: true });
 
     // Progress tracker: only instantiated when the caller wants updates.
     // Emits no more than ~4 ticks / second so Telegram rate limits are
@@ -394,6 +413,10 @@ export async function downloadDirect(
             response.data.on("error", reject);
         });
     } catch (err) {
+        if (cancelled) {
+            try { fs.unlinkSync(filePath); } catch { /* */ }
+            throw new DownloadCancelledError();
+        }
         if (sizeExceeded) {
             try {
                 fs.unlinkSync(filePath);
@@ -412,6 +435,8 @@ export async function downloadDirect(
             // best-effort cleanup
         }
         throw err;
+    } finally {
+        options.signal?.removeEventListener("abort", onAbort);
     }
 
     // Final 100% tick so the UI snaps to a complete bar instead of leaving
@@ -474,11 +499,24 @@ export class FileTooLargeError extends Error {
     }
 }
 
+/**
+ * Thrown when the current download is interrupted by a user-initiated
+ * cancel (progress-message "Cancel" button, admin kill, …). Callers
+ * should translate this to a calm in-chat confirmation rather than a
+ * stack trace.
+ */
+export class DownloadCancelledError extends Error {
+    constructor() {
+        super("Download cancelled");
+        this.name = "DownloadCancelledError";
+    }
+}
+
 export async function downloadWithYtDlp(
     url: string,
     destDir: string,
     onProgress?: DownloadProgress,
-    options: YtDlpOptions = {},
+    options: YtDlpOptions & { signal?: AbortSignal } = {},
 ): Promise<DownloadResult> {
     await fs.promises.mkdir(destDir, { recursive: true });
 
@@ -534,10 +572,46 @@ export async function downloadWithYtDlp(
 
     args.push(url);
 
-    return await new Promise<DownloadResult>((resolve, reject) => {
+    return runYtDlp({
+        args,
+        destDir,
+        prefix,
+        onProgress,
+        signal: options.signal,
+    });
+}
+
+/**
+ * Shared yt-dlp runner used by both the video and audio download paths.
+ * Handles progress streaming, partial cleanup, and cooperative
+ * cancellation via `AbortSignal` (SIGTERM, then SIGKILL after 3 s).
+ */
+function runYtDlp(opts: {
+    args: string[];
+    destDir: string;
+    prefix: string;
+    onProgress?: DownloadProgress;
+    signal?: AbortSignal;
+}): Promise<DownloadResult> {
+    const { args, destDir, prefix, onProgress, signal } = opts;
+    return new Promise<DownloadResult>((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new DownloadCancelledError());
+            return;
+        }
         const proc = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
         let stdout = "";
         let stderr = "";
+        let cancelled = false;
+
+        const onAbort = () => {
+            cancelled = true;
+            try { proc.kill("SIGTERM"); } catch { /* */ }
+            setTimeout(() => {
+                try { proc.kill("SIGKILL"); } catch { /* */ }
+            }, 3_000).unref();
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
 
         proc.stdout.on("data", (chunk: Buffer) => {
             stdout += chunk.toString();
@@ -559,8 +633,6 @@ export async function downloadWithYtDlp(
             }
         });
 
-        // Best-effort cleanup of any partial files yt-dlp may have written
-        // under our unique prefix when the process fails.
         const cleanupPartials = () => {
             try {
                 for (const entry of fs.readdirSync(destDir)) {
@@ -578,11 +650,18 @@ export async function downloadWithYtDlp(
         };
 
         proc.on("error", (err) => {
+            signal?.removeEventListener("abort", onAbort);
             cleanupPartials();
-            reject(err);
+            reject(cancelled ? new DownloadCancelledError() : err);
         });
 
         proc.on("close", (code) => {
+            signal?.removeEventListener("abort", onAbort);
+            if (cancelled) {
+                cleanupPartials();
+                reject(new DownloadCancelledError());
+                return;
+            }
             if (code !== 0) {
                 cleanupPartials();
                 reject(
@@ -620,7 +699,7 @@ export async function downloadAudioWithYtDlp(
     url: string,
     destDir: string,
     onProgress?: DownloadProgress,
-    options: YtDlpOptions = {},
+    options: YtDlpOptions & { signal?: AbortSignal } = {},
 ): Promise<DownloadResult> {
     await fs.promises.mkdir(destDir, { recursive: true });
     const prefix = `${Date.now()}`;
@@ -663,76 +742,11 @@ export async function downloadAudioWithYtDlp(
     }
     args.push(url);
 
-    return await new Promise<DownloadResult>((resolve, reject) => {
-        const proc = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
-        let stdout = "";
-        let stderr = "";
-
-        proc.stdout.on("data", (chunk: Buffer) => {
-            stdout += chunk.toString();
-        });
-
-        proc.stderr.on("data", (chunk: Buffer) => {
-            const text = chunk.toString();
-            stderr += text;
-            if (!onProgress) return;
-            for (const line of text.split("\n")) {
-                const rich = parseYtDlpProgress(line);
-                if (rich) {
-                    try {
-                        onProgress(rich);
-                    } catch {
-                        // ignore callback errors
-                    }
-                }
-            }
-        });
-
-        const cleanupPartials = () => {
-            try {
-                for (const entry of fs.readdirSync(destDir)) {
-                    if (entry.startsWith(`${prefix}_`)) {
-                        try {
-                            fs.unlinkSync(path.join(destDir, entry));
-                        } catch {
-                            // ignore
-                        }
-                    }
-                }
-            } catch {
-                // ignore
-            }
-        };
-
-        proc.on("error", (err) => {
-            cleanupPartials();
-            reject(err);
-        });
-
-        proc.on("close", (code) => {
-            if (code !== 0) {
-                cleanupPartials();
-                reject(
-                    new Error(
-                        `yt-dlp exited with code ${code}: ${stderr.trim() || stdout.trim()}`,
-                    ),
-                );
-                return;
-            }
-            const lines = stdout
-                .split("\n")
-                .map((l) => l.trim())
-                .filter((l) => l.length > 0);
-            const filePath = lines[lines.length - 1];
-            if (!filePath || !fs.existsSync(filePath)) {
-                reject(
-                    new Error(
-                        `yt-dlp completed but the audio file was not found (stdout: ${stdout.trim()})`,
-                    ),
-                );
-                return;
-            }
-            resolve({ filePath, filename: path.basename(filePath) });
-        });
+    return runYtDlp({
+        args,
+        destDir,
+        prefix,
+        onProgress,
+        signal: options.signal,
     });
 }
