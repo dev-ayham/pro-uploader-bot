@@ -363,7 +363,7 @@ const ar: Strings = {
     upload_cancel_button: "❌ إلغاء العملية",
     upload_cancelled: "🛑 تم إلغاء العملية.",
     cooldown_active: (m, sec) =>
-        `⏳ يرجى الانتظار ${m}د ${sec}ث قبل بدء عملية جديدة (يسمح بعملية واحدة فقط في كل فترة تبريد لكل مستخدم).`,
+        `⏳️ يمكنك إرسال مهمة جديدة بعد ${m}د ${sec}ث`,
     cooldown_ready: "✅ يمكنك الآن إرسال عملية جديدة.",
     screenshots_caption: (n) => `🖼️ ${n} لقطات من الفيديو`,
     screenshots_single: "🖼️ لقطة من الفيديو",
@@ -571,7 +571,7 @@ const en: Strings = {
     upload_cancel_button: "❌ Cancel",
     upload_cancelled: "🛑 Upload cancelled.",
     cooldown_active: (m, sec) =>
-        `⏳ Please wait ${m}m ${sec}s before starting a new upload (1 upload per cooldown window per user).`,
+        `⏳️ You can send a new task after ${m}m ${sec}s`,
     cooldown_ready: "✅ You can send a new task now.",
     screenshots_caption: (n) => `🖼️ ${n} screenshots from the video`,
     screenshots_single: "🖼️ Screenshot from the video",
@@ -780,7 +780,7 @@ const tr: Strings = {
     upload_cancel_button: "❌ Iptal",
     upload_cancelled: "🛑 Yukleme iptal edildi.",
     cooldown_active: (m, sec) =>
-        `⏳ Yeni bir yukleme baslatmadan once ${m}d ${sec}s bekleyin (kullanici basina sogutma suresinde 1 yukleme).`,
+        `⏳️ ${m}dk ${sec}sn sonra yeni bir gorev gonderebilirsiniz`,
     cooldown_ready: "✅ Artik yeni bir gorev gonderebilirsiniz.",
     screenshots_caption: (n) => `🖼️ Videodan ${n} ekran goruntusu`,
     screenshots_single: "🖼️ Videodan ekran goruntusu",
@@ -988,7 +988,7 @@ const fr: Strings = {
     upload_cancel_button: "❌ Annuler",
     upload_cancelled: "🛑 Upload annule.",
     cooldown_active: (m, sec) =>
-        `⏳ Patientez ${m}m ${sec}s avant un nouvel upload (1 upload par fenetre de refroidissement et par utilisateur).`,
+        `⏳️ Vous pouvez envoyer une nouvelle tache dans ${m}m ${sec}s`,
     cooldown_ready: "✅ Vous pouvez envoyer une nouvelle tache maintenant.",
     screenshots_caption: (n) => `🖼️ ${n} captures de la video`,
     screenshots_single: "🖼️ Capture de la video",
@@ -1196,7 +1196,7 @@ const es: Strings = {
     upload_cancel_button: "❌ Cancelar",
     upload_cancelled: "🛑 Carga cancelada.",
     cooldown_active: (m, sec) =>
-        `⏳ Espera ${m}m ${sec}s antes de iniciar una nueva carga (1 carga por ventana de enfriamiento por usuario).`,
+        `⏳️ Puedes enviar una nueva tarea en ${m}m ${sec}s`,
     cooldown_ready: "✅ Ya puedes enviar una nueva tarea.",
     screenshots_caption: (n) => `🖼️ ${n} capturas del video`,
     screenshots_single: "🖼️ Captura del video",
