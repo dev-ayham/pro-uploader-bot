@@ -158,6 +158,7 @@ interface Strings {
     uploading: (p: ProgressInfo) => string;
     success: string;
     error: string;
+    url_not_found: string;
     invalid_url: string;
     profile_link_not_supported: string;
     unsupported_url: string;
@@ -345,6 +346,7 @@ const ar: Strings = {
         }),
     success: "✅ تم الرفع بنجاح!",
     error: "❌ حدث خطأ أثناء الرفع.",
+    url_not_found: "❌ الرابط خاطئ - الملف غير موجود",
     invalid_url: "⚠️ لم أجد رابطاً صالحاً في الرسالة.",
     profile_link_not_supported:
         "📷 هذا رابط حساب انستغرام وليس منشوراً.\n\n" +
@@ -553,6 +555,7 @@ const en: Strings = {
         }),
     success: "✅ Upload complete!",
     error: "❌ Upload failed.",
+    url_not_found: "❌ Invalid link — file not found",
     invalid_url: "⚠️ No valid URL found in your message.",
     profile_link_not_supported:
         "📷 That's an Instagram profile link, not a post.\n\n" +
@@ -762,6 +765,7 @@ const tr: Strings = {
         }),
     success: "✅ Yukleme tamamlandi!",
     error: "❌ Yukleme basarisiz.",
+    url_not_found: "❌ Gecersiz link — dosya bulunamadi",
     invalid_url: "⚠️ Mesajinizda gecerli bir URL bulunamadi.",
     profile_link_not_supported:
         "📷 Bu bir Instagram profil linki, gönderi değil.\n\n" +
@@ -970,6 +974,7 @@ const fr: Strings = {
         }),
     success: "✅ Upload termine !",
     error: "❌ Erreur lors de l'upload.",
+    url_not_found: "❌ Lien invalide — fichier introuvable",
     invalid_url: "⚠️ Aucun URL valide trouve.",
     profile_link_not_supported:
         "📷 C'est un lien de profil Instagram, pas une publication.\n\n" +
@@ -1178,6 +1183,7 @@ const es: Strings = {
         }),
     success: "✅ Carga completada!",
     error: "❌ Error en la carga.",
+    url_not_found: "❌ Enlace invalido — archivo no encontrado",
     invalid_url: "⚠️ No se encontro un URL valido.",
     profile_link_not_supported:
         "📷 Ese es un enlace de perfil de Instagram, no una publicación.\n\n" +
