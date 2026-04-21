@@ -1113,8 +1113,10 @@ async function presentQualityMenu(
     } catch (err) {
         console.error("Failed to send quality menu:", err);
         // If we can't render the menu, fall back to the legacy direct upload
-        // so the user isn't left hanging.
-        await runUpload(ctx, url, "default");
+        // so the user isn't left hanging. Preserve any inline rename the
+        // user supplied — dropping it here would silently upload under the
+        // default name despite their explicit request.
+        await runUpload(ctx, url, "default", customFilename);
         return;
     }
 
