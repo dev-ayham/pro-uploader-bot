@@ -72,8 +72,51 @@ function escapeHtml(s: string): string {
         .replace(/>/g, "&gt;");
 }
 
-function buildCaption(emoji: string, url: string): string {
-    const title = cleanTitle(url);
+/**
+ * Hard cap on inline filename overrides. Telegram itself tolerates much
+ * longer document names but long captions / filenames make the tile ugly
+ * and can break renaming on iOS. 120 chars matches what popular competitor
+ * bots accept and leaves headroom for any extension we append later.
+ */
+const MAX_INLINE_FILENAME_LEN = 120;
+
+/**
+ * Parse a user-supplied `URL | filename` suffix. `rest` is the slice of
+ * the original message that sits *after* the URL we already matched.
+ * We accept an optional space, then `|`, then the rest of the line as
+ * the custom base name. Empty strings and names containing control
+ * characters or path separators are rejected so we never hand Telegram
+ * a bogus `DocumentAttributeFilename`.
+ */
+function extractInlineFilename(
+    text: string,
+    afterUrlIndex: number,
+): string | undefined {
+    const rest = text.slice(afterUrlIndex);
+    const m = rest.match(/^\s*\|\s*(.+?)\s*$/s);
+    if (!m) return undefined;
+    const raw = m[1].replace(/[\r\n\t]+/g, " ").trim();
+    if (!raw) return undefined;
+    // Disallow path separators and ASCII control chars. Everything else
+    // (Arabic, emoji, punctuation, dots, spaces) is fine — Telegram
+    // preserves the name verbatim in the doc attribute.
+    if (/[\u0000-\u001f/\\]/.test(raw)) return undefined;
+    if (raw.length > MAX_INLINE_FILENAME_LEN) {
+        return raw.slice(0, MAX_INLINE_FILENAME_LEN);
+    }
+    return raw;
+}
+
+function buildCaption(
+    emoji: string,
+    url: string,
+    customFilename?: string,
+): string {
+    // Strip a trailing extension from the inline override so the caption
+    // reads as a clean title (users rarely want `.mp4` in the caption).
+    const title = customFilename
+        ? customFilename.replace(/\.[A-Za-z0-9]{1,6}$/, "")
+        : cleanTitle(url);
     return `<b>${emoji}</b> <code>${escapeHtml(title)}</code>`;
 }
 
@@ -564,6 +607,7 @@ async function runUpload(
     ctx: Context,
     url: string,
     mode: UploadMode,
+    customFilename?: string,
 ): Promise<boolean> {
     if (!ctx.chat) return false;
     const chatId = ctx.chat.id;
@@ -703,11 +747,12 @@ async function runUpload(
                 await uploader.uploadAudioFromUrl(
                     chatId,
                     url,
-                    buildCaption("🎵", url),
+                    buildCaption("🎵", url, customFilename),
                     onProgress,
                     {
                         renamePrefix: prefs.renamePrefix,
                         renameSuffix: prefs.renameSuffix,
+                        customFilename,
                         signal: abortController.signal,
                     },
                 );
@@ -717,20 +762,26 @@ async function runUpload(
                 await uploader.uploadFromUrl(
                     chatId,
                     url,
-                    buildCaption(emoji, url),
+                    buildCaption(emoji, url, customFilename),
                     onProgress,
                     {
                         asDocument,
                         maxHeight: maxHeightForMode(mode),
                         renamePrefix: prefs.renamePrefix,
                         renameSuffix: prefs.renameSuffix,
+                        customFilename,
                         signal: abortController.signal,
                         // Rebuild the caption once the real filename is
                         // known (yt-dlp's %(title)s / Content-Disposition)
                         // so YouTube/TikTok/etc. get meaningful titles
-                        // instead of "YouTube · dQw4w9WgXcQ".
-                        captionFromFilename: (filename) =>
-                            buildCaptionFromFilename(emoji, url, filename),
+                        // instead of "YouTube · dQw4w9WgXcQ". When the
+                        // user supplied an inline filename override, we
+                        // pin the caption to that name up-front and skip
+                        // this hook entirely.
+                        captionFromFilename: customFilename
+                            ? undefined
+                            : (filename) =>
+                                  buildCaptionFromFilename(emoji, url, filename),
                         thumbnailPath: hasThumbnail(chatId)
                             ? thumbnailPath(chatId)
                             : undefined,
@@ -1004,6 +1055,13 @@ interface PendingUpload {
     at: number;
     /** Message id of the menu message, so we can edit / delete it. */
     menuMessageId?: number;
+    /**
+     * Inline filename override (`URL | custom_name`) captured from the
+     * message that opened the quality menu. Replayed when the callback
+     * fires so the user gets their chosen name regardless of which
+     * quality they pick.
+     */
+    customFilename?: string;
 }
 const pendingUploads: Map<number, PendingUpload> = new Map();
 const PENDING_TTL_MS = 5 * 60 * 1000;
@@ -1024,7 +1082,11 @@ function getPendingUpload(chatId: number): PendingUpload | undefined {
  * the URL in callback_data — Telegram limits that field to 64 bytes. We
  * look it up from the pendingUploads map keyed by chat id.
  */
-async function presentQualityMenu(ctx: Context, url: string): Promise<void> {
+async function presentQualityMenu(
+    ctx: Context,
+    url: string,
+    customFilename?: string,
+): Promise<void> {
     if (!ctx.chat) return;
     const chatId = ctx.chat.id;
     const s = t(langOf(chatId));
@@ -1056,7 +1118,12 @@ async function presentQualityMenu(ctx: Context, url: string): Promise<void> {
         return;
     }
 
-    pendingUploads.set(chatId, { url, at: Date.now(), menuMessageId });
+    pendingUploads.set(chatId, {
+        url,
+        at: Date.now(),
+        menuMessageId,
+        customFilename,
+    });
 }
 
 const QUALITY_MODE_MAP: Record<string, UploadMode> = {
@@ -1153,7 +1220,7 @@ bot.callbackQuery(/^q:(audio|best|1080|720|480|360|doc|cancel)$/, async (ctx) =>
         }
     }
 
-    await runUpload(ctx, pending.url, mode);
+    await runUpload(ctx, pending.url, mode, pending.customFilename);
 });
 
 bot.on("message:text", async (ctx) => {
@@ -1264,6 +1331,17 @@ bot.on("message:text", async (ctx) => {
     }
 
     const url = match[0];
+    // Inline rename syntax: `URL | custom_name`. The URL regex stops at
+    // the first whitespace so anything after it is free for us to parse.
+    // We accept an optional space before/after the pipe and take the rest
+    // of the line as the filename (spaces allowed). Strings that are
+    // empty after trimming, or that contain characters Telegram rejects
+    // in DocumentAttributeFilename, are ignored so the upload still
+    // proceeds with the default name instead of failing late.
+    const customFilename = extractInlineFilename(
+        text,
+        (match.index ?? 0) + url.length,
+    );
     const prev = recentUrls.get(chatId);
     if (prev && prev.url === url && Date.now() - prev.at < 30_000) {
         await ctx.reply(s.duplicate_ignored);
@@ -1301,11 +1379,11 @@ bot.on("message:text", async (ctx) => {
     // Direct-download URLs (.mp4, .pdf, …) have no per-quality alternatives
     // — yt-dlp is not involved. Skip the menu for those and upload directly.
     if (!shouldUseYtDlp(url)) {
-        await runUpload(ctx, url, "default");
+        await runUpload(ctx, url, "default", customFilename);
         return;
     }
 
-    await presentQualityMenu(ctx, url);
+    await presentQualityMenu(ctx, url, customFilename);
 });
 
 // Global handler-level error safety net. A throw inside a handler should
