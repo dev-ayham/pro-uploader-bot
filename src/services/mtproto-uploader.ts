@@ -748,7 +748,8 @@ export class MTProtoUploader {
         // the user would receive the same file twice. To prevent that we
         // attach a late-success handler that deletes the duplicate
         // message from the chat once it arrives.
-        let timedOut = false;
+        if (options.signal?.aborted) throw new UploadCancelledError();
+        let abandoned = false;
         const sendPromise = this.client.sendFile(chatId, {
             file: url,
             caption,
@@ -757,7 +758,11 @@ export class MTProtoUploader {
         });
         sendPromise.then(
             (msg) => {
-                if (!timedOut) return;
+                // If we already abandoned the external path (timeout OR
+                // user cancelled), the file must not actually arrive in
+                // the chat. Delete the late duplicate so the cancel
+                // feedback the user already saw stays truthful.
+                if (!abandoned) return;
                 const id = (msg as { id?: unknown } | null | undefined)?.id;
                 if (typeof id !== "number" && typeof id !== "bigint") return;
                 this.client
@@ -779,22 +784,55 @@ export class MTProtoUploader {
         try {
             await new Promise<void>((resolve, reject) => {
                 const timer = setTimeout(() => {
-                    timedOut = true;
+                    abandoned = true;
                     reject(new Error("external-url timeout"));
                 }, EXTERNAL_URL_TIMEOUT_MS);
+                const onAbort = () => {
+                    abandoned = true;
+                    clearTimeout(timer);
+                    reject(new UploadCancelledError());
+                };
+                if (options.signal) {
+                    if (options.signal.aborted) {
+                        onAbort();
+                        return;
+                    }
+                    options.signal.addEventListener("abort", onAbort, {
+                        once: true,
+                    });
+                }
                 sendPromise.then(
                     () => {
                         clearTimeout(timer);
+                        options.signal?.removeEventListener(
+                            "abort",
+                            onAbort,
+                        );
                         resolve();
                     },
                     (err) => {
                         clearTimeout(timer);
+                        options.signal?.removeEventListener(
+                            "abort",
+                            onAbort,
+                        );
                         reject(err);
                     },
                 );
             });
+            // Last-mile check: if the user hit Cancel in the tiny gap
+            // between sendFile resolving and this line, honour it. The
+            // `abandoned` flag above also attempts to delete the late
+            // message from the chat, but that cleanup is best-effort.
+            if (options.signal?.aborted) {
+                abandoned = true;
+                throw new UploadCancelledError();
+            }
             return true;
         } catch (err) {
+            // Cancellation is a first-class error, not a fallback trigger —
+            // re-throw so the caller skips the download+upload retry.
+            if (err instanceof UploadCancelledError) throw err;
             // Log enough detail that we can tell whether Telegram is
             // rejecting the CDN (WEBPAGE_CURL_FAILED / WEBPAGE_MEDIA_EMPTY),
             // the file is too big (FILE_PART_*_MISSING), our own timeout

@@ -222,6 +222,18 @@ const UPLOAD_COOLDOWN_MS = (() => {
 })();
 
 /**
+ * Soft cap on `chatCooldownUntil`. When the map exceeds this size the
+ * runUpload finally block prunes expired entries and (if still over)
+ * evicts oldest insertions. Chosen large enough that a single burst of
+ * legitimate traffic (~thousands of concurrent users) does not trigger
+ * eviction of still-live cooldown windows, but small enough that
+ * long-lived processes never accumulate unbounded state. Matches the
+ * bounding style of `processedMessages` (5000) and `intentCache` (500)
+ * elsewhere in the codebase.
+ */
+const COOLDOWN_MAP_MAX = 10_000;
+
+/**
  * Fixed callback-data payload for the single inline "Cancel" button
  * attached to the status-message keyboard. The chat id is implied by
  * the callback context so we don't need to encode it here.
@@ -729,10 +741,30 @@ async function runUpload(
         // a cooldown — intentional, matches the product spec of "1 op per
         // 5 minutes per user" without creating a retry-spam loophole.
         if (UPLOAD_COOLDOWN_MS > 0) {
-            chatCooldownUntil.set(
-                chatId,
-                Date.now() + UPLOAD_COOLDOWN_MS,
-            );
+            const now = Date.now();
+            chatCooldownUntil.set(chatId, now + UPLOAD_COOLDOWN_MS);
+            // Sweep expired entries opportunistically so the map
+            // doesn't grow unboundedly with one entry per user that
+            // ever uploaded. Each entry is tiny (two numbers) but
+            // long-lived bot processes can accumulate tens of
+            // thousands of stale rows otherwise. We only scan when
+            // the map is already large to keep the common path O(1).
+            if (chatCooldownUntil.size > COOLDOWN_MAP_MAX) {
+                for (const [cid, until] of chatCooldownUntil) {
+                    if (until <= now) chatCooldownUntil.delete(cid);
+                }
+                // Bounded belt-and-braces: if everyone is still
+                // inside their cooldown window we fall back to
+                // evicting the oldest insertion. Map iteration is
+                // insertion-ordered in JS, so the first key is the
+                // oldest. Keeps memory deterministic under pathological
+                // growth (DoS / bot spam).
+                while (chatCooldownUntil.size > COOLDOWN_MAP_MAX) {
+                    const oldest = chatCooldownUntil.keys().next().value;
+                    if (oldest === undefined) break;
+                    chatCooldownUntil.delete(oldest);
+                }
+            }
         }
     }
 }
