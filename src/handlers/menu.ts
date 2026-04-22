@@ -25,10 +25,9 @@ function mainMenuKeyboard(lang: Lang): InlineKeyboard {
         .text(s.menu_settings, "menu:settings")
         .text(s.menu_help, "menu:help")
         .row()
-        .text(s.menu_about, "menu:about")
         .text(`${LANG_FLAG[lang]} ${s.menu_language}`, "menu:lang:pick")
-        .row()
         .text(s.menu_platforms, "menu:platforms")
+        .row()
         .text(s.menu_stats, "menu:stats");
 }
 
@@ -37,11 +36,6 @@ function helpKeyboard(lang: Lang): InlineKeyboard {
     return new InlineKeyboard()
         .text(s.menu_settings, "menu:settings")
         .text(s.menu_back, "menu:home");
-}
-
-function aboutKeyboard(lang: Lang): InlineKeyboard {
-    const s = t(lang);
-    return new InlineKeyboard().text(s.menu_back, "menu:home");
 }
 
 function simpleBackKeyboard(lang: Lang): InlineKeyboard {
@@ -71,8 +65,8 @@ function buildWelcome(lang: Lang, name: string): string {
 
 /**
  * Register all user-facing entry-point commands (/start, /menu, /help,
- * /about, /cancel, /lang) plus the inline navigation that ties them
- * together. Also exposes publishBotCommands for the startup hook.
+ * /cancel, /lang) plus the inline navigation that ties them together.
+ * Also exposes publishBotCommands for the startup hook.
  */
 export function registerMenuHandlers(bot: Bot): void {
     // /start and /menu both land on the main menu.
@@ -97,14 +91,6 @@ export function registerMenuHandlers(bot: Bot): void {
             parse_mode: "HTML",
             reply_markup: helpKeyboard(lang),
             link_preview_options: { is_disabled: true },
-        });
-    });
-
-    bot.command("about", async (ctx) => {
-        const lang = ctx.chat ? getUserPrefs(ctx.chat.id).language : "ar";
-        await ctx.reply(t(lang).about_text, {
-            parse_mode: "HTML",
-            reply_markup: aboutKeyboard(lang),
         });
     });
 
@@ -133,11 +119,6 @@ export function registerMenuHandlers(bot: Bot): void {
     bot.callbackQuery("menu:help", async (ctx) => {
         const lang = ctx.chat ? getUserPrefs(ctx.chat.id).language : "ar";
         await safeEdit(ctx, buildHelpText(lang), helpKeyboard(lang));
-    });
-
-    bot.callbackQuery("menu:about", async (ctx) => {
-        const lang = ctx.chat ? getUserPrefs(ctx.chat.id).language : "ar";
-        await safeEdit(ctx, t(lang).about_text, aboutKeyboard(lang));
     });
 
     bot.callbackQuery("menu:settings", async (ctx) => {
@@ -301,16 +282,6 @@ export async function publishBotCommands(bot: Bot): Promise<void> {
                 tr: "Yardim",
                 fr: "Aide",
                 es: "Ayuda",
-            },
-        },
-        {
-            command: "about",
-            desc: {
-                ar: "عن البوت",
-                en: "About",
-                tr: "Hakkinda",
-                fr: "A propos",
-                es: "Acerca de",
             },
         },
         {
