@@ -403,7 +403,7 @@ bot.use(async (ctx, next) => {
     await next();
 });
 
-// /start, /menu, /help, /about, /cancel and the top-level inline nav.
+// /start, /menu, /help, /cancel and the top-level inline nav.
 registerMenuHandlers(bot);
 
 // /settings, /settings callback_query handlers etc.

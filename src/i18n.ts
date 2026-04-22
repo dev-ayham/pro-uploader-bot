@@ -99,7 +99,6 @@ interface Strings {
     welcome: (name: string) => string;
     menu_settings: string;
     menu_help: string;
-    menu_about: string;
     menu_close: string;
     menu_back: string;
     menu_language: string;
@@ -111,9 +110,6 @@ interface Strings {
     help_commands: string;
     help_platforms: string;
     help_features: string;
-
-    // About
-    about_text: string;
 
     // Settings
     settings_title: string;
@@ -257,14 +253,13 @@ const ar: Strings = {
         `Facebook / Reddit / Vimeo / SoundCloud\n` +
         `+ أي رابط مباشر لملف\n\n` +
         `<b>الميزات:</b>\n` +
-        `• رفع حتى 2GB عبر MTProto\n` +
+        `• رفع حتى 2GB\n` +
         `• رفع كفيديو أو كملف\n` +
         `• سبويلر، إعادة تسمية، لقطات\n` +
         `• صورة مصغّرة مخصّصة\n\n` +
         `اضغط الأزرار أدناه للبدء.`,
     menu_settings: "⚙️ الإعدادات",
     menu_help: "📖 المساعدة",
-    menu_about: "ℹ️ حول",
     menu_close: "❌ إغلاق",
     menu_back: "🔙 رجوع",
     menu_language: "🌐 اللغة",
@@ -278,7 +273,6 @@ const ar: Strings = {
         `/menu — القائمة الرئيسية\n` +
         `/settings — الإعدادات\n` +
         `/help — المساعدة\n` +
-        `/about — عن البوت\n` +
         `/cancel — إلغاء الإدخال\n` +
         `/lang — تغيير اللغة`,
     help_platforms:
@@ -289,14 +283,6 @@ const ar: Strings = {
         `\n\n<b>الميزات:</b>\n` +
         `• رفع كملف / فيديو\n• سبويلر\n• بادئة / لاحقة\n` +
         `• لقطات شاشة\n• صورة مصغّرة\n• رفع حتى 2GB`,
-
-    about_text:
-        `ℹ️ <b>عن البوت</b>\n\n` +
-        `<b>Pro Uploader</b> — بوت رفع ملفات متطوّر\n` +
-        `Node.js + grammy + GramJS MTProto\n` +
-        `yt-dlp للاستخراج | ffmpeg للمعالجة\n` +
-        `SQLite للتخزين الدائم\n\n` +
-        `<b>لماذا MTProto؟</b>\nلتجاوز حدود Bot API (رفع حتى 2GB بدل 50MB).`,
 
     settings_title: "⚙️ <b>الإعدادات</b>",
     settings_summary: "<b>الملخّص:</b>",
@@ -414,7 +400,7 @@ const ar: Strings = {
         "• Vimeo\n" +
         "• Twitch\n" +
         "• SoundCloud\n\n" +
-        "<i>حد أقصى للرفع: 2GB عبر MTProto</i>",
+        "<i>حد أقصى للرفع: 2GB</i>",
     stats_text: (uploads, joined, lang) =>
         "<b>📊 إحصائياتك</b>\n\n" +
         `• عدد الرفعات الناجحة: <b>${uploads}</b>\n` +
@@ -451,7 +437,7 @@ const ar: Strings = {
     quality_btn_480: "📺 480p",
     quality_btn_360: "📺 360p",
     quality_btn_document: "📄 كملف",
-    quality_btn_cancel: "❌ إلغاء",
+    quality_btn_cancel: "🔙 رجوع",
     quality_cancelled: "تم الإلغاء.",
     quality_expired: "انتهت صلاحية الخيار. أرسل الرابط من جديد.",
 };
@@ -466,14 +452,13 @@ const en: Strings = {
         `Facebook / Reddit / Vimeo / SoundCloud\n` +
         `+ any direct file URL\n\n` +
         `<b>Features:</b>\n` +
-        `• Upload up to 2GB via MTProto\n` +
+        `• Upload up to 2GB\n` +
         `• Upload as video or document\n` +
         `• Spoiler, rename, screenshots\n` +
         `• Custom thumbnail\n\n` +
         `Tap the buttons below to get started.`,
     menu_settings: "⚙️ Settings",
     menu_help: "📖 Help",
-    menu_about: "ℹ️ About",
     menu_close: "❌ Close",
     menu_back: "🔙 Back",
     menu_language: "🌐 Language",
@@ -487,7 +472,6 @@ const en: Strings = {
         `/menu — Main menu\n` +
         `/settings — Settings\n` +
         `/help — Help\n` +
-        `/about — About\n` +
         `/cancel — Cancel input\n` +
         `/lang — Change language`,
     help_platforms:
@@ -498,14 +482,6 @@ const en: Strings = {
         `\n\n<b>Features:</b>\n` +
         `• Upload as document / video\n• Spoiler\n• Prefix / suffix rename\n` +
         `• Video screenshots\n• Custom thumbnail\n• Up to 2GB uploads`,
-
-    about_text:
-        `ℹ️ <b>About</b>\n\n` +
-        `<b>Pro Uploader</b> — Advanced upload bot\n` +
-        `Node.js + grammy + GramJS MTProto\n` +
-        `yt-dlp for extraction | ffmpeg for processing\n` +
-        `SQLite for persistent storage\n\n` +
-        `<b>Why MTProto?</b>\nTo bypass Bot API limits (upload up to 2GB instead of 50MB).`,
 
     settings_title: "⚙️ <b>Settings</b>",
     settings_summary: "<b>Summary:</b>",
@@ -623,7 +599,7 @@ Clear: <code>/suffix clear</code>`,
         "• Vimeo\n" +
         "• Twitch\n" +
         "• SoundCloud\n\n" +
-        "<i>Upload size limit: 2 GB via MTProto</i>",
+        "<i>Upload size limit: 2 GB</i>",
     stats_text: (uploads, joined, lang) =>
         "<b>📊 Your stats</b>\n\n" +
         `• Successful uploads: <b>${uploads}</b>\n` +
@@ -661,7 +637,7 @@ Clear: <code>/suffix clear</code>`,
     quality_btn_480: "📺 480p",
     quality_btn_360: "📺 360p",
     quality_btn_document: "📄 As document",
-    quality_btn_cancel: "❌ Cancel",
+    quality_btn_cancel: "🔙 Back",
     quality_cancelled: "Cancelled.",
     quality_expired: "This choice expired. Please send the link again.",
 };
@@ -676,14 +652,13 @@ const tr: Strings = {
         `Facebook / Reddit / Vimeo / SoundCloud\n` +
         `+ herhangi bir dogrudan dosya linki\n\n` +
         `<b>Ozellikler:</b>\n` +
-        `• MTProto ile 2GB'a kadar yukleme\n` +
+        `• 2GB'a kadar yukleme\n` +
         `• Video veya belge olarak yukleme\n` +
         `• Spoiler, yeniden adlandirma, ekran goruntusu\n` +
         `• Ozel kucuk resim\n\n` +
         `Baslamak icin asagidaki butonlara basin.`,
     menu_settings: "⚙️ Ayarlar",
     menu_help: "📖 Yardim",
-    menu_about: "ℹ️ Hakkinda",
     menu_close: "❌ Kapat",
     menu_back: "🔙 Geri",
     menu_language: "🌐 Dil",
@@ -697,7 +672,6 @@ const tr: Strings = {
         `/menu — Ana menu\n` +
         `/settings — Ayarlar\n` +
         `/help — Yardim\n` +
-        `/about — Hakkinda\n` +
         `/cancel — Girisi iptal et\n` +
         `/lang — Dil degistir`,
     help_platforms:
@@ -708,14 +682,6 @@ const tr: Strings = {
         `\n\n<b>Ozellikler:</b>\n` +
         `• Belge / video olarak yukleme\n• Spoiler\n• On ek / son ek\n` +
         `• Video ekran goruntuleri\n• Ozel kucuk resim\n• 2GB'a kadar yukleme`,
-
-    about_text:
-        `ℹ️ <b>Hakkinda</b>\n\n` +
-        `<b>Pro Uploader</b> — Gelismis yukleme botu\n` +
-        `Node.js + grammy + GramJS MTProto\n` +
-        `yt-dlp | ffmpeg\n` +
-        `SQLite kalici depolama\n\n` +
-        `<b>Neden MTProto?</b>\nBot API sinirlarini asmak icin (50MB yerine 2GB).`,
 
     settings_title: "⚙️ <b>Ayarlar</b>",
     settings_summary: "<b>Ozet:</b>",
@@ -833,7 +799,7 @@ Temizle: <code>/suffix clear</code>`,
         "• Vimeo\n" +
         "• Twitch\n" +
         "• SoundCloud\n\n" +
-        "<i>Yükleme sınırı: MTProto ile 2 GB</i>",
+        "<i>Yükleme sınırı: 2 GB</i>",
     stats_text: (uploads, joined, lang) =>
         "<b>📊 İstatistikleriniz</b>\n\n" +
         `• Başarılı yüklemeler: <b>${uploads}</b>\n` +
@@ -871,7 +837,7 @@ Temizle: <code>/suffix clear</code>`,
     quality_btn_480: "📺 480p",
     quality_btn_360: "📺 360p",
     quality_btn_document: "📄 Belge olarak",
-    quality_btn_cancel: "❌ İptal",
+    quality_btn_cancel: "🔙 Geri",
     quality_cancelled: "İptal edildi.",
     quality_expired: "Bu seçim sona erdi. Lütfen bağlantıyı tekrar gönderin.",
 };
@@ -886,14 +852,13 @@ const fr: Strings = {
         `Facebook / Reddit / Vimeo / SoundCloud\n` +
         `+ tout lien direct\n\n` +
         `<b>Fonctionnalites :</b>\n` +
-        `• Upload jusqu'a 2 Go via MTProto\n` +
+        `• Upload jusqu'a 2 Go\n` +
         `• Upload video ou document\n` +
         `• Spoiler, renommage, captures\n` +
         `• Miniature personnalisee\n\n` +
         `Appuyez sur les boutons ci-dessous.`,
     menu_settings: "⚙️ Parametres",
     menu_help: "📖 Aide",
-    menu_about: "ℹ️ A propos",
     menu_close: "❌ Fermer",
     menu_back: "🔙 Retour",
     menu_language: "🌐 Langue",
@@ -907,7 +872,6 @@ const fr: Strings = {
         `/menu — Menu principal\n` +
         `/settings — Parametres\n` +
         `/help — Aide\n` +
-        `/about — A propos\n` +
         `/cancel — Annuler la saisie\n` +
         `/lang — Changer la langue`,
     help_platforms:
@@ -918,13 +882,6 @@ const fr: Strings = {
         `\n\n<b>Fonctionnalites :</b>\n` +
         `• Upload document / video\n• Spoiler\n• Prefixe / suffixe\n` +
         `• Captures video\n• Miniature perso\n• Upload jusqu'a 2 Go`,
-
-    about_text:
-        `ℹ️ <b>A propos</b>\n\n` +
-        `<b>Pro Uploader</b> — Bot d'upload avance\n` +
-        `Node.js + grammy + GramJS MTProto\n` +
-        `yt-dlp | ffmpeg\nSQLite\n\n` +
-        `<b>Pourquoi MTProto ?</b>\nPour depasser la limite de 50 Mo (jusqu'a 2 Go).`,
 
     settings_title: "⚙️ <b>Parametres</b>",
     settings_summary: "<b>Resume :</b>",
@@ -1042,7 +999,7 @@ Effacer: <code>/suffix clear</code>`,
         "• Vimeo\n" +
         "• Twitch\n" +
         "• SoundCloud\n\n" +
-        "<i>Taille max: 2 Go via MTProto</i>",
+        "<i>Taille max: 2 Go</i>",
     stats_text: (uploads, joined, lang) =>
         "<b>📊 Vos statistiques</b>\n\n" +
         `• Envois réussis: <b>${uploads}</b>\n` +
@@ -1080,7 +1037,7 @@ Effacer: <code>/suffix clear</code>`,
     quality_btn_480: "📺 480p",
     quality_btn_360: "📺 360p",
     quality_btn_document: "📄 En document",
-    quality_btn_cancel: "❌ Annuler",
+    quality_btn_cancel: "🔙 Retour",
     quality_cancelled: "Annulé.",
     quality_expired: "Ce choix a expiré. Veuillez renvoyer le lien.",
 };
@@ -1095,14 +1052,13 @@ const es: Strings = {
         `Facebook / Reddit / Vimeo / SoundCloud\n` +
         `+ cualquier enlace directo\n\n` +
         `<b>Funciones:</b>\n` +
-        `• Carga hasta 2GB via MTProto\n` +
+        `• Carga hasta 2GB\n` +
         `• Subir como video o documento\n` +
         `• Spoiler, renombrar, capturas\n` +
         `• Miniatura personalizada\n\n` +
         `Pulsa los botones de abajo para empezar.`,
     menu_settings: "⚙️ Ajustes",
     menu_help: "📖 Ayuda",
-    menu_about: "ℹ️ Acerca de",
     menu_close: "❌ Cerrar",
     menu_back: "🔙 Volver",
     menu_language: "🌐 Idioma",
@@ -1116,7 +1072,6 @@ const es: Strings = {
         `/menu — Menu principal\n` +
         `/settings — Ajustes\n` +
         `/help — Ayuda\n` +
-        `/about — Acerca de\n` +
         `/cancel — Cancelar entrada\n` +
         `/lang — Cambiar idioma`,
     help_platforms:
@@ -1127,13 +1082,6 @@ const es: Strings = {
         `\n\n<b>Funciones:</b>\n` +
         `• Subir como documento / video\n• Spoiler\n• Prefijo / sufijo\n` +
         `• Capturas de video\n• Miniatura personalizada\n• Carga hasta 2GB`,
-
-    about_text:
-        `ℹ️ <b>Acerca de</b>\n\n` +
-        `<b>Pro Uploader</b> — Bot de carga avanzado\n` +
-        `Node.js + grammy + GramJS MTProto\n` +
-        `yt-dlp | ffmpeg\nSQLite\n\n` +
-        `<b>¿Por que MTProto?</b>\nPara superar el limite de 50MB (hasta 2GB).`,
 
     settings_title: "⚙️ <b>Ajustes</b>",
     settings_summary: "<b>Resumen:</b>",
@@ -1251,7 +1199,7 @@ Borrar: <code>/suffix clear</code>`,
         "• Vimeo\n" +
         "• Twitch\n" +
         "• SoundCloud\n\n" +
-        "<i>Límite de subida: 2 GB vía MTProto</i>",
+        "<i>Límite de subida: 2 GB</i>",
     stats_text: (uploads, joined, lang) =>
         "<b>📊 Tus estadísticas</b>\n\n" +
         `• Subidas exitosas: <b>${uploads}</b>\n` +
@@ -1289,7 +1237,7 @@ Borrar: <code>/suffix clear</code>`,
     quality_btn_480: "📺 480p",
     quality_btn_360: "📺 360p",
     quality_btn_document: "📄 Como documento",
-    quality_btn_cancel: "❌ Cancelar",
+    quality_btn_cancel: "🔙 Volver",
     quality_cancelled: "Cancelado.",
     quality_expired: "Esta opción caducó. Vuelve a enviar el enlace.",
 };
