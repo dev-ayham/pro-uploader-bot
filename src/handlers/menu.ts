@@ -210,7 +210,7 @@ async function handleSettingsFromCallback(ctx: Context): Promise<void> {
         .text(s.settings_media, "settings:page:media")
         .text(`${LANG_FLAG[prefs.language]} ${s.menu_language}`, "menu:lang:pick")
         .row()
-        .text(s.menu_close, "settings:close");
+        .text(s.menu_back, "menu:home");
     await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
 }
 

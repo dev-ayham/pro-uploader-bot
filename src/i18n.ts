@@ -99,7 +99,6 @@ interface Strings {
     welcome: (name: string) => string;
     menu_settings: string;
     menu_help: string;
-    menu_close: string;
     menu_back: string;
     menu_language: string;
     menu_platforms: string;
@@ -260,7 +259,6 @@ const ar: Strings = {
         `اضغط الأزرار أدناه للبدء.`,
     menu_settings: "⚙️ الإعدادات",
     menu_help: "📖 المساعدة",
-    menu_close: "❌ إغلاق",
     menu_back: "🔙 رجوع",
     menu_language: "🌐 اللغة",
     menu_platforms: "🌐 المنصّات",
@@ -459,7 +457,6 @@ const en: Strings = {
         `Tap the buttons below to get started.`,
     menu_settings: "⚙️ Settings",
     menu_help: "📖 Help",
-    menu_close: "❌ Close",
     menu_back: "🔙 Back",
     menu_language: "🌐 Language",
     menu_platforms: "🌐 Platforms",
@@ -659,7 +656,6 @@ const tr: Strings = {
         `Baslamak icin asagidaki butonlara basin.`,
     menu_settings: "⚙️ Ayarlar",
     menu_help: "📖 Yardim",
-    menu_close: "❌ Kapat",
     menu_back: "🔙 Geri",
     menu_language: "🌐 Dil",
     menu_platforms: "🌐 Platformlar",
@@ -859,7 +855,6 @@ const fr: Strings = {
         `Appuyez sur les boutons ci-dessous.`,
     menu_settings: "⚙️ Parametres",
     menu_help: "📖 Aide",
-    menu_close: "❌ Fermer",
     menu_back: "🔙 Retour",
     menu_language: "🌐 Langue",
     menu_platforms: "🌐 Plateformes",
@@ -1059,7 +1054,6 @@ const es: Strings = {
         `Pulsa los botones de abajo para empezar.`,
     menu_settings: "⚙️ Ajustes",
     menu_help: "📖 Ayuda",
-    menu_close: "❌ Cerrar",
     menu_back: "🔙 Volver",
     menu_language: "🌐 Idioma",
     menu_platforms: "🌐 Plataformas",
